@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         云上花匠 · 任务卡片显示设置
 // @namespace    https://ppgarden.top/
-// @version      1.8.3
+// @version      1.8.4
 // @description  新版／经典版任务卡片与三张时间卡片，适配 iOS；支持高清长图导出复制、截图深浅色、卡片尺寸、信息显示与筛选。
 // @homepageURL  https://github.com/XWind18/ppgarden
 // @supportURL   https://github.com/XWind18/ppgarden/issues
