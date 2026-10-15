@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         云上花匠 · 任务卡片显示设置
 // @namespace    https://ppgarden.top/
-// @version      1.8.9
+// @version      1.8.10
 // @description  新版／经典版任务卡片与三张时间卡片，适配 iOS；支持设置历史与自动恢复、高清长图导出复制、截图深浅色、卡片尺寸、信息显示与筛选。
 // @homepageURL  https://github.com/XWind18/ppgarden
 // @supportURL   https://github.com/XWind18/ppgarden/issues
@@ -263,6 +263,10 @@
     #ppg-layout-panel footer { display: flex; justify-content: flex-end; gap: 8px; }
     .grtc-toolbar:has(#ppg-layout-pending-toggle) { flex-wrap: wrap; }
     #ppg-layout-pending-toggle { white-space: nowrap; }
+    #ppg-layout-pending-toggle::after { content: '✓'; display: inline-block; width: 1em; margin-left: 6px; font-weight: 700; visibility: hidden; }
+    #ppg-layout-pending-toggle[aria-pressed="true"] { background: #e6f0ff; border-color: #4f8fce; color: #205994; }
+    #ppg-layout-pending-toggle[aria-pressed="true"]::after { visibility: visible; }
+    :root[data-theme="dark"] #ppg-layout-pending-toggle[aria-pressed="true"] { background: #223f64; border-color: #95bfee; color: #bdd8fa; }
     #ppg-layout-open, #ppg-layout-quick-copy {
       position: fixed; right: 16px; z-index: 2147483647;
       min-height: 40px; margin: 0; padding: 8px 16px; border-radius: 999px; cursor: pointer;
