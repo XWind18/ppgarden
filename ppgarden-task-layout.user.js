@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         云上花匠 · 任务卡片显示设置
 // @namespace    https://ppgarden.top/
-// @version      1.8.7
-// @description  新版／经典版任务卡片与三张时间卡片，适配 iOS；支持高清长图导出复制、截图深浅色、卡片尺寸、信息显示与筛选。
+// @version      1.8.8
+// @description  新版／经典版任务卡片与三张时间卡片，适配 iOS；支持设置历史与自动恢复、高清长图导出复制、截图深浅色、卡片尺寸、信息显示与筛选。
 // @homepageURL  https://github.com/XWind18/ppgarden
 // @supportURL   https://github.com/XWind18/ppgarden/issues
 // @updateURL    https://raw.githubusercontent.com/XWind18/ppgarden/main/ppgarden-task-layout.meta.js
@@ -124,7 +124,37 @@
     };
   }
 
-  for (const page of pages) page.settings = normalize(page, await readSetting(page.storageKey, {}));
+  // 网站存储独立于脚本管理器，更新时重置管理器设置仍可恢复。
+  const historyKey = 'ppgarden-layout-history-v1';
+  let settingsHistory = [];
+  try {
+    const stored = JSON.parse(localStorage.getItem(historyKey));
+    if (Array.isArray(stored)) settingsHistory = stored.filter(entry =>
+      Number.isSafeInteger(entry?.savedAt) && entry.savedAt > 0 && entry.savedAt <= Date.now() + 60000
+      && entry.settings?.task && typeof entry.settings.task === 'object' && !Array.isArray(entry.settings.task)
+      && entry.settings?.land && typeof entry.settings.land === 'object' && !Array.isArray(entry.settings.land)
+      && ['light', 'dark'].includes(entry.settings.theme)
+      && Number.isFinite(entry.settings.scale) && entry.settings.scale >= 1 && entry.settings.scale <= 3
+    ).sort((a, b) => b.savedAt - a.savedAt).slice(0, 20).map(entry => ({
+      savedAt: entry.savedAt,
+      reason: ['自动保存', '手动保存', '恢复默认前', '应用方案前', '恢复历史前'].includes(entry.reason) ? entry.reason : '自动保存',
+      settings: { task: normalize(task, entry.settings.task), land: normalize(land, entry.settings.land),
+        theme: entry.settings.theme, scale: entry.settings.scale },
+    }));
+  } catch (error) {
+    console.warn('[云上花匠] 读取设置历史失败', error);
+  }
+  const latestBackup = settingsHistory[0]?.settings;
+  let recoveredSettings = false;
+  for (const page of pages) {
+    const stored = await readSetting(page.storageKey, null);
+    const backup = latestBackup?.[page === task ? 'task' : 'land'];
+    page.settings = normalize(page, stored ?? backup);
+    if (stored == null && backup) {
+      await writeSetting(page.storageKey, page.settings);
+      recoveredSettings = true;
+    }
+  }
   let activePage;
   const style = document.createElement('style');
   style.id = 'ppg-layout-style';
@@ -227,6 +257,9 @@
     #ppg-layout-panel #ppg-layout-theme:checked::before { transform: translateX(14px); }
     #ppg-layout-panel #ppg-layout-theme:focus-visible { outline: 2px solid var(--ink, #222); outline-offset: 3px; }
     #ppg-layout-panel p { margin: 12px 0; color: var(--ink-muted, #777); font-size: 12px; }
+    #ppg-layout-panel .ppg-history { margin: 16px 0; border-top: 1px solid var(--paper-line, #ccc); }
+    #ppg-layout-panel .ppg-history summary { padding: 10px 0; cursor: pointer; font-weight: 600; }
+    #ppg-layout-panel .ppg-history summary small { margin-left: 6px; font-weight: 400; color: var(--ink-muted, #777); }
     #ppg-layout-panel footer { display: flex; justify-content: flex-end; gap: 8px; }
     #ppg-layout-open, #ppg-layout-quick-copy {
       position: fixed; right: 16px; z-index: 2147483647;
@@ -252,7 +285,7 @@
       }
       #ppg-layout-panel .ppg-columns { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 8px; }
       #ppg-layout-panel :is(input[type="number"], input[type="search"], select) { width: 100%; min-height: 44px; font-size: 16px; }
-      #ppg-layout-panel :is(button, .ppg-fields label, .ppg-filter, .ppg-theme) { min-height: 44px; }
+      #ppg-layout-panel :is(button, summary, .ppg-fields label, .ppg-filter, .ppg-theme) { min-height: 44px; }
       #ppg-layout-panel .ppg-fields { gap: 4px 8px; }
       #ppg-layout-open, #ppg-layout-quick-copy { right: 12px; min-height: 44px; }
       #ppg-layout-quick-status { right: 12px; }
@@ -495,6 +528,16 @@
       <div class="ppg-fields"></div>
     </fieldset>
     <p>修改后立即生效并自动保存。列数较多时，卡片会变窄。</p>
+    <details class="ppg-history">
+      <summary>设置历史<small id="ppg-layout-history-count"></small></summary>
+      <label class="ppg-select">历史记录<select id="ppg-layout-history"></select></label>
+      <div class="ppg-field-actions">
+        <button type="button" class="button secondary" data-action="save-history">保存当前</button>
+        <button type="button" class="button secondary" data-action="restore-history">恢复所选</button>
+      </div>
+      <p>自动保存最近20条，包含任务、花圃和截图设置。历史独立保存在当前浏览器的网站存储中，更新脚本时设置被清空会尝试自动恢复；清除网站数据后历史会丢失。</p>
+      <p id="ppg-layout-history-status" role="status" aria-live="polite"></p>
+    </details>
     <footer>
       <button type="button" class="button secondary" data-action="reset">恢复默认</button>
       <button type="button" class="button" data-action="close">关闭</button>
@@ -534,29 +577,102 @@
   const presetButton = panel.querySelector('[data-action="preset"]');
   const classicPresetButton = panel.querySelector('[data-action="classic-preset"]');
   const countdownPresetButton = panel.querySelector('[data-action="countdown-preset"]');
+  const historySelect = panel.querySelector('#ppg-layout-history');
+  const historyStatus = panel.querySelector('#ppg-layout-history-status');
+  const restoreHistoryButton = panel.querySelector('[data-action="restore-history"]');
   let checkboxes = [];
 
   const themeKey = 'ppgarden-screenshot-theme-v1';
-  let screenshotTheme = await readSetting(themeKey, 'light') === 'dark' ? 'dark' : 'light';
+  const storedTheme = await readSetting(themeKey, null);
+  let screenshotTheme = (storedTheme ?? latestBackup?.theme) === 'dark' ? 'dark' : 'light';
+  if (storedTheme == null && latestBackup) {
+    await writeSetting(themeKey, screenshotTheme);
+    recoveredSettings = true;
+  }
   const setScreenshotTheme = theme => {
     screenshotTheme = theme;
     writeSetting(themeKey, theme);
     themeInput.checked = theme === 'dark';
   };
   themeInput.checked = screenshotTheme === 'dark';
-  themeInput.addEventListener('change', () => setScreenshotTheme(themeInput.checked ? 'dark' : 'light'));
+  themeInput.addEventListener('change', () => {
+    setScreenshotTheme(themeInput.checked ? 'dark' : 'light');
+    rememberSettings();
+  });
 
   const scaleKey = 'ppgarden-screenshot-scale-v1';
-  const savedScale = Number(await readSetting(scaleKey, 2));
+  const storedScale = await readSetting(scaleKey, null);
+  const savedScale = Number(storedScale ?? latestBackup?.scale ?? 2);
   let screenshotMultiplier = Number.isFinite(savedScale) && savedScale >= 1 && savedScale <= 3 ? savedScale : 2;
+  if (storedScale == null && latestBackup) {
+    await writeSetting(scaleKey, screenshotMultiplier);
+    recoveredSettings = true;
+  }
   scaleInput.value = screenshotMultiplier;
   scaleInput.addEventListener('input', () => {
     if (!scaleInput.checkValidity()) return;
     screenshotMultiplier = scaleInput.valueAsNumber;
     writeSetting(scaleKey, screenshotMultiplier);
+    rememberSettings();
   });
   scaleInput.addEventListener('change', () => {
     if (!scaleInput.checkValidity()) scaleInput.value = screenshotMultiplier;
+  });
+
+  function renderHistory() {
+    const selected = historySelect.value;
+    historySelect.replaceChildren(...settingsHistory.map(entry => new Option(
+      `${formatTime(new Date(entry.savedAt))} · ${entry.reason} · ${entry.settings.task.cardStyle === 'classic' ? '经典' : '新版'} ${entry.settings.task.columns}列`,
+      String(entry.savedAt)
+    )));
+    if (settingsHistory.some(entry => String(entry.savedAt) === selected)) historySelect.value = selected;
+    historySelect.disabled = restoreHistoryButton.disabled = !settingsHistory.length;
+    panel.querySelector('#ppg-layout-history-count').textContent = `${settingsHistory.length}/20`;
+  }
+
+  function rememberSettings(reason = '自动保存') {
+    const settings = { task: normalize(task, task.settings), land: normalize(land, land.settings),
+      theme: screenshotTheme, scale: screenshotMultiplier };
+    if (reason === '自动保存' && JSON.stringify(settingsHistory[0]?.settings) === JSON.stringify(settings)) return true;
+    const entry = { savedAt: Math.max(Date.now(), (settingsHistory[0]?.savedAt ?? 0) + 1), reason, settings };
+    const next = [entry, ...settingsHistory].slice(0, 20);
+    try {
+      localStorage.setItem(historyKey, JSON.stringify(next));
+    } catch (error) {
+      console.warn('[云上花匠] 保存设置历史失败', error);
+      historyStatus.textContent = '历史备份失败，请检查网站存储是否可用；当前设置仍由脚本管理器保存。';
+      return false;
+    }
+    settingsHistory = next;
+    renderHistory();
+    historyStatus.textContent = `已备份 ${formatTime(new Date(entry.savedAt))}`;
+    return true;
+  }
+
+  renderHistory();
+  rememberSettings();
+  if (recoveredSettings) {
+    historyStatus.textContent = '检测到脚本设置缺失，已从网站历史恢复最近配置。';
+    panel.querySelector('.ppg-history').open = true;
+  }
+  panel.querySelector('[data-action="save-history"]').addEventListener('click', () => {
+    if (rememberSettings('手动保存')) historySelect.value = String(settingsHistory[0].savedAt);
+  });
+  restoreHistoryButton.addEventListener('click', () => {
+    const entry = settingsHistory.find(item => String(item.savedAt) === historySelect.value);
+    if (!entry || !rememberSettings('恢复历史前')) return;
+    for (const page of pages) {
+      page.settings = normalize(page, entry.settings[page === task ? 'task' : 'land']);
+      writeSetting(page.storageKey, page.settings);
+    }
+    setScreenshotTheme(entry.settings.theme);
+    screenshotMultiplier = entry.settings.scale;
+    scaleInput.value = screenshotMultiplier;
+    writeSetting(scaleKey, screenshotMultiplier);
+    syncInputs();
+    apply();
+    rememberSettings();
+    historyStatus.textContent = `已恢复 ${formatTime(new Date(entry.savedAt))}，恢复前的配置也已备份。`;
   });
 
   function renderPage() {
@@ -607,6 +723,7 @@
 
   function save() {
     writeSetting(activePage.storageKey, activePage.settings);
+    rememberSettings();
     apply();
   }
 
@@ -819,7 +936,7 @@
   quickCopyButton.addEventListener('click', () => exportLongImage(true));
   button.addEventListener('click', () => panel.hidden ? openSettings() : closeSettings());
   panel.addEventListener('input', event => {
-    if (!activePage || event.target === themeInput || event.target === scaleInput) return;
+    if (!activePage || event.target === themeInput || event.target === scaleInput || event.target.closest('.ppg-history')) return;
     const settings = activePage.settings;
     activePage.settings = {
       columns: columnsInput.checkValidity() ? Number(columnsInput.value) : settings.columns,
@@ -853,7 +970,7 @@
   });
   panel.querySelector('[data-action="close"]').addEventListener('click', closeSettings);
   panel.querySelector('[data-action="reset"]').addEventListener('click', () => {
-    if (!activePage) return;
+    if (!activePage || !rememberSettings('恢复默认前')) return;
     activePage.settings = normalize(activePage, {});
     syncInputs();
     save();
@@ -870,7 +987,7 @@
     });
   }
   for (const preset of [presetButton, classicPresetButton]) preset.addEventListener('click', () => {
-    if (activePage !== task) return;
+    if (activePage !== task || !rememberSettings('应用方案前')) return;
     const classic = preset === classicPresetButton;
     task.settings = {
       ...task.settings,
@@ -888,7 +1005,7 @@
     save();
   });
   countdownPresetButton.addEventListener('click', () => {
-    if (activePage !== task) return;
+    if (activePage !== task || !rememberSettings('应用方案前')) return;
     task.settings.hidden = ['image', 'by', 'cult', 'progress', 'status', 'hint'];
     syncInputs();
     save();
