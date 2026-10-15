@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         云上花匠 · 任务卡片显示设置
 // @namespace    https://ppgarden.top/
-// @version      1.8.6
+// @version      1.8.7
 // @description  新版／经典版任务卡片与三张时间卡片，适配 iOS；支持高清长图导出复制、截图深浅色、卡片尺寸、信息显示与筛选。
 // @homepageURL  https://github.com/XWind18/ppgarden
 // @supportURL   https://github.com/XWind18/ppgarden/issues
@@ -328,12 +328,10 @@
     ${task.grid} { gap: 2px !important; }
     ${task.card} {
       --ppg-classic-bg: #fffae9; --ppg-classic-ink: #895821;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr) auto;
       grid-template-rows: auto auto 1fr auto auto auto auto auto;
       align-content: stretch; gap: 0 4px; padding: 4px !important;
       border: 0 !important; border-radius: 2px !important; box-shadow: none !important; text-align: center;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
-      line-height: 1.4; font-variant-numeric: tabular-nums;
     }
     ${task.card}.grtc-task--available { --ppg-classic-bg: #effcf3; --ppg-classic-ink: #2a7c4b; }
     ${task.card}.grtc-task--unavailable { --ppg-classic-bg: #fff0f4; --ppg-classic-ink: #a93260; }
@@ -344,11 +342,11 @@
       background: var(--ppg-classic-bg) !important; color: var(--ppg-classic-ink);
     }
     ${task.card} :is(.grtc-task__top > b, .grtc-task__top > em, .grtc-task__class, .grtc-task__cult) {
-      padding: 0; border: 0; border-radius: 0; background: none; color: inherit; font-style: normal; line-height: 1.4;
+      padding: 0; border: 0; border-radius: 0; background: none; color: inherit;
     }
-    ${task.card} .grtc-task__top > b { grid-area: 1 / 1; align-self: start; font-size: 10px; font-weight: 500; opacity: 1; }
+    ${task.card} .grtc-task__top > b { grid-area: 1 / 1; align-self: start; }
     ${task.card} .grtc-task__by {
-      grid-area: 1 / 1 / 2 / -1; margin-left: 28px; text-align: right; font-size: 11px; line-height: 1.4;
+      grid-area: 1 / 1 / 2 / -1; margin-left: 28px; text-align: right;
       color: inherit;
     }
     ${task.card} .grtc-task__visual {
@@ -357,31 +355,29 @@
     }
     ${task.card} > strong {
       grid-area: 3 / 1 / 4 / -1 !important; align-self: end; padding-top: 4px;
-      font-size: 14px; line-height: 1.4; font-weight: 600; text-align: center; color: inherit;
+      text-align: center; color: inherit;
     }
     ${task.card} .grtc-task__top > em {
-      grid-area: 4 / 1 / 5 / -1; justify-self: center; font-size: 13px; line-height: 1.4; font-weight: 600; opacity: 1;
+      grid-area: 4 / 1 / 5 / -1; justify-self: center;
     }
-    ${task.card} .grtc-task__cult { grid-area: 5 / 1 / 6 / -1; justify-self: center; font-size: 11px; }
+    ${task.card} .grtc-task__cult { grid-area: 5 / 1 / 6 / -1; justify-self: center; }
     ${task.card} .grtc-task__class {
-      grid-area: 6 / 1; justify-self: start; align-self: end; font-size: 11px; line-height: 1.4; font-weight: 500; opacity: 1;
+      grid-area: 6 / 1; justify-self: start; align-self: end;
     }
     ${task.card} .grtc-progress {
       grid-area: 6 / 2; align-self: end; justify-self: end; width: auto; height: auto;
-      border: 0; background: none; overflow: visible; font: 600 11px/1.4 system-ui, sans-serif; color: inherit;
+      border: 0; background: none; overflow: visible; color: inherit;
     }
     ${task.card} .grtc-progress > i { display: none; }
-    ${task.card} .grtc-progress :is(small, span) { position: static; font: inherit; color: inherit; }
+    ${task.card} .grtc-progress :is(small, span) { position: static; color: inherit; }
     ${task.card} .grtc-card-status { display: contents; color: inherit; }
     ${task.card} .grtc-card-status__heading { grid-area: 7 / 1; justify-self: start; }
-    ${task.card} .grtc-card-status__heading b, ${task.card} .grtc-card-status__hint { font-size: 11px; line-height: 1.4; }
-    ${task.card} .grtc-card-status__hint { grid-area: 8 / 1 / 9 / -1; color: inherit; opacity: 1; }
+    ${task.card} .grtc-card-status__hint { grid-area: 8 / 1 / 9 / -1; color: inherit; }
     ${task.card} .grtc-card-status__time {
-      grid-area: 6 / 2; align-self: end; justify-self: end; color: inherit; line-height: 1.4;
+      grid-area: 6 / 2; align-self: end; justify-self: end; color: inherit;
       padding: 0; border: 0; background: none; gap: 0; justify-content: flex-end;
     }
     ${task.card} .grtc-card-status__time > span { display: none; }
-    ${task.card} .grtc-card-status__time strong { font-size: 12px; line-height: 1.4; font-weight: 600; }
     ${task.card}:has(.grtc-card-status__time) .grtc-progress { grid-row: 7; }
   `;
 
