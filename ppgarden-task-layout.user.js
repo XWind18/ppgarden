@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         云上花匠 · 任务卡片显示设置
 // @namespace    https://ppgarden.top/
-// @version      1.8.3
+// @version      1.8.4
 // @description  新版／经典版任务卡片与三张时间卡片，适配 iOS；支持高清长图导出复制、截图深浅色、卡片尺寸、信息显示与筛选。
 // @homepageURL  https://github.com/XWind18/ppgarden
 // @supportURL   https://github.com/XWind18/ppgarden/issues
@@ -197,6 +197,18 @@
     }
     #ppg-layout-panel fieldset { margin: 18px 0; padding: 0; border: 0; min-width: 0; }
     #ppg-layout-panel legend { margin-bottom: 10px; font-weight: 600; }
+    #ppg-layout-panel .ppg-style-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    #ppg-layout-panel .ppg-style-choice { position: relative; min-width: 0; cursor: pointer; }
+    #ppg-layout-panel .ppg-style-choice input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+    #ppg-layout-panel .ppg-style-choice > span {
+      box-sizing: border-box; display: grid; gap: 2px; min-height: 60px; padding: 8px 28px 8px 12px;
+      border: 1px solid var(--paper-line, #ccc); border-radius: 10px; background: var(--paper-card, #fff);
+    }
+    #ppg-layout-panel .ppg-style-choice b { font-size: 14px; }
+    #ppg-layout-panel .ppg-style-choice small { color: var(--ink-muted, #777); font-size: 11px; }
+    #ppg-layout-panel .ppg-style-choice input:checked + span { border-color: var(--green, #438466); background: var(--paper-inner, #f5f5f5); box-shadow: inset 0 0 0 1px var(--green, #438466); }
+    #ppg-layout-panel .ppg-style-choice input:checked + span::after { content: '✓'; position: absolute; top: 9px; right: 10px; color: var(--green, #438466); font-weight: 700; }
+    #ppg-layout-panel .ppg-style-choice input:focus-visible + span { outline: 2px solid var(--ink, #222); outline-offset: 3px; }
     #ppg-layout-panel .ppg-field-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
     #ppg-layout-panel .ppg-field-actions button { padding: 5px 8px; min-height: 30px; font: inherit; font-size: 12px; }
     #ppg-layout-panel .ppg-field-actions [hidden] { display: none !important; }
@@ -436,12 +448,13 @@
       <p>关闭开关截图为浅色，开启为深色。PNG 使用当前列数、最大宽度和最小高度，统一按桌面布局生成；任务内容优先单行，过长时自动换行。顶部三张时间卡片与任务卡片等宽，依次显示同步、下次任务刷新和截图时间。</p>
       <p id="ppg-layout-export-status" role="status" aria-live="polite"></p>
     </div>
-    <label id="ppg-layout-style-option" class="ppg-select" hidden>任务样式
-      <select id="ppg-layout-card-style">
-        <option value="modern">新版 · 图文卡片</option>
-        <option value="classic">经典版 · 密排居中</option>
-      </select>
-    </label>
+    <fieldset id="ppg-layout-style-option" hidden>
+      <legend>任务样式</legend>
+      <div id="ppg-layout-card-style" class="ppg-style-choices">
+        <label class="ppg-style-choice"><input type="radio" name="ppg-card-style" value="modern"><span><b>新版</b><small>图文卡片</small></span></label>
+        <label class="ppg-style-choice"><input type="radio" name="ppg-card-style" value="classic"><span><b>经典版</b><small>密排居中</small></span></label>
+      </div>
+    </fieldset>
     <label class="ppg-columns">每行卡片数（1–20）
       <input id="ppg-layout-columns" type="number" min="1" max="20" step="1" required>
     </label>
@@ -506,7 +519,7 @@
   quickCopyButton.setAttribute('aria-describedby', quickStatus.id);
   document.body.append(panel, button, quickCopyButton, quickStatus);
   const columnsInput = panel.querySelector('#ppg-layout-columns');
-  const cardStyleInput = panel.querySelector('#ppg-layout-card-style');
+  const cardStyleInputs = [...panel.querySelectorAll('[name="ppg-card-style"]')];
   const maxWidthInput = panel.querySelector('#ppg-layout-max-width');
   const minHeightInput = panel.querySelector('#ppg-layout-min-height');
   const exportButton = panel.querySelector('#ppg-layout-export');
@@ -578,7 +591,7 @@
     maxWidthInput.value = settings.maxWidth ?? '';
     minHeightInput.value = settings.minHeight ?? '';
     if (activePage === task) {
-      cardStyleInput.value = settings.cardStyle;
+      for (const input of cardStyleInputs) input.checked = input.value === settings.cardStyle;
       panel.querySelector('#ppg-layout-pending').checked = settings.pendingOnly;
       panel.querySelector('#ppg-layout-score-background').checked = settings.scoreBackground;
     }
@@ -815,7 +828,7 @@
         : settings.minHeight,
       hidden: checkboxes.filter(checkbox => !checkbox.checked).map(checkbox => checkbox.dataset.field),
       ...(activePage === task ? {
-        cardStyle: cardStyleInput.value === 'classic' ? 'classic' : 'modern',
+        cardStyle: cardStyleInputs.find(input => input.checked)?.value === 'classic' ? 'classic' : 'modern',
         pendingOnly: panel.querySelector('#ppg-layout-pending').checked,
         scoreBackground: panel.querySelector('#ppg-layout-score-background').checked,
       } : {
