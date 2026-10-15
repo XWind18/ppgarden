@@ -27,13 +27,24 @@
       assert(available().nextElementSibling === toggle, '待刷新按钮紧挨原可接取按钮右侧');
       assert(toggle.tagName === 'BUTTON' && toggle.classList.contains('grtc-toolbar__toggle')
         && toggle.getAttribute('aria-pressed') === 'false', '使用原生按钮和网站样式，并提供选中状态');
+      const idleBackground = getComputedStyle(toggle).backgroundColor;
+      const idleBorder = getComputedStyle(toggle).borderTopColor;
+      const idleWidth = toggle.getBoundingClientRect().width;
       toggle.click();
       await tick();
       assert(toggle.getAttribute('aria-pressed') === 'true' && checkbox.checked, '快捷按钮开启后同步设置窗选项');
+      assert(getComputedStyle(toggle).backgroundColor !== idleBackground
+        && getComputedStyle(toggle).borderTopColor !== idleBorder
+        && getComputedStyle(toggle, '::after').content.includes('✓')
+        && getComputedStyle(toggle, '::after').visibility === 'visible', '选中后显示独立的高亮底色、边框和勾选标记');
       assert(shown().length === 5 && shown().every(card => card.classList.contains('grtc-task--pending')), '快捷筛选只显示待刷新任务');
       assert((await GM.getValue('ppgarden-task-layout-v1')).pendingOnly, '快捷筛选自动保存');
       toggle.click();
       assert(!checkbox.checked && shown().length === 12, '再次点击恢复全部任务');
+      assert(getComputedStyle(toggle).backgroundColor === idleBackground
+        && getComputedStyle(toggle).borderTopColor === idleBorder
+        && getComputedStyle(toggle, '::after').visibility === 'hidden'
+        && Math.abs(toggle.getBoundingClientRect().width - idleWidth) < 1, '取消选中后恢复普通样式且按钮宽度不跳动');
       available().click();
       await tick();
       assert(available().getAttribute('aria-pressed') === 'true'
