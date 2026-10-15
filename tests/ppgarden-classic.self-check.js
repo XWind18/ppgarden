@@ -53,6 +53,9 @@
     document.querySelector('#ppg-layout-open').click();
     assert([...style.querySelectorAll('label')].every(label => label.getBoundingClientRect().height >= 44)
       && style.scrollWidth <= style.clientWidth, '样式按钮触控区域至少44px且无水平溢出');
+    assert(panel.querySelector('#ppg-layout-style-option').getBoundingClientRect().height <= 52
+      && panel.querySelector('#ppg-layout-style-label').getBoundingClientRect().right <= style.getBoundingClientRect().left,
+      '任务样式标题与切换按钮保持紧凑单行');
     preset.click();
     assert(selectedStyle() === 'classic' && columns.value === '3' && maxWidth.value === '190' && minHeight.value === '60', '经典方案使用3列190px和最小60px');
     assert(upgradeType.textContent === '示例成员 升级', '经典版直接显示升级人姓名');
