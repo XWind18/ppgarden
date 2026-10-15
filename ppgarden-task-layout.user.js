@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         云上花匠 · 任务卡片显示设置
 // @namespace    https://ppgarden.top/
-// @version      1.8.8
+// @version      1.8.9
 // @description  新版／经典版任务卡片与三张时间卡片，适配 iOS；支持设置历史与自动恢复、高清长图导出复制、截图深浅色、卡片尺寸、信息显示与筛选。
 // @homepageURL  https://github.com/XWind18/ppgarden
 // @supportURL   https://github.com/XWind18/ppgarden/issues
@@ -261,6 +261,8 @@
     #ppg-layout-panel .ppg-history summary { padding: 10px 0; cursor: pointer; font-weight: 600; }
     #ppg-layout-panel .ppg-history summary small { margin-left: 6px; font-weight: 400; color: var(--ink-muted, #777); }
     #ppg-layout-panel footer { display: flex; justify-content: flex-end; gap: 8px; }
+    .grtc-toolbar:has(#ppg-layout-pending-toggle) { flex-wrap: wrap; }
+    #ppg-layout-pending-toggle { white-space: nowrap; }
     #ppg-layout-open, #ppg-layout-quick-copy {
       position: fixed; right: 16px; z-index: 2147483647;
       min-height: 40px; margin: 0; padding: 8px 16px; border-radius: 999px; cursor: pointer;
@@ -564,6 +566,26 @@
   quickStatus.setAttribute('aria-live', 'polite');
   quickCopyButton.setAttribute('aria-describedby', quickStatus.id);
   document.body.append(panel, button, quickCopyButton, quickStatus);
+  const pendingToggle = document.createElement('button');
+  pendingToggle.id = 'ppg-layout-pending-toggle';
+  pendingToggle.type = 'button';
+  pendingToggle.className = 'grtc-toolbar__toggle';
+  pendingToggle.textContent = '只看待刷新';
+  pendingToggle.addEventListener('click', () => {
+    if (activePage !== task) return;
+    task.settings.pendingOnly = !task.settings.pendingOnly;
+    syncInputs();
+    save();
+  });
+  document.addEventListener('click', event => {
+    const available = availableToggle();
+    if (activePage === task && task.settings.pendingOnly && available?.contains(event.target)
+      && available.getAttribute('aria-pressed') === 'false') {
+      task.settings.pendingOnly = false;
+      syncInputs();
+      save();
+    }
+  }, true);
   const columnsInput = panel.querySelector('#ppg-layout-columns');
   const cardStyleInputs = [...panel.querySelectorAll('[name="ppg-card-style"]')];
   const maxWidthInput = panel.querySelector('#ppg-layout-max-width');
@@ -689,7 +711,7 @@
     `).join('');
     filters.innerHTML = activePage === task ? `
       <label class="ppg-filter"><input id="ppg-layout-pending" type="checkbox">只看待刷新</label>
-      <p>若无结果，请关闭页面的“只看可接取”。</p>
+      <p>与页面上的「只看可接取」互斥，开启后只显示待刷新任务。</p>
     ` : `
       <label class="ppg-select">土地状态
         <select id="ppg-layout-land-state">${landStates.map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select>
@@ -1074,6 +1096,27 @@
   }
 
   let titleId = 0;
+  function availableToggle() {
+    return [...document.querySelectorAll('.grtc-toolbar .grtc-toolbar__toggle')]
+      .find(toggle => toggle.textContent.trim() === '只看可接取');
+  }
+
+  function syncPendingToggle() {
+    const available = activePage === task ? availableToggle() : null;
+    // 原工具栏重渲染时可能复制了脚本按钮，只保留原按钮和事件处理。
+    for (const duplicate of document.querySelectorAll('#ppg-layout-pending-toggle')) {
+      if (duplicate !== pendingToggle) duplicate.remove();
+    }
+    if (!available) {
+      pendingToggle.remove();
+      return;
+    }
+    if (available.nextElementSibling !== pendingToggle) available.after(pendingToggle);
+    const pressed = String(task.settings.pendingOnly);
+    if (pendingToggle.getAttribute('aria-pressed') !== pressed) pendingToggle.setAttribute('aria-pressed', pressed);
+    if (task.settings.pendingOnly && available.getAttribute('aria-pressed') === 'true') available.click();
+  }
+
   function syncPage() {
     const nextPage = pages.find(page => document.querySelector(page.grid));
     button.hidden = !nextPage;
@@ -1087,6 +1130,7 @@
       activePage = nextPage;
       if (activePage) renderPage();
     }
+    syncPendingToggle();
     // 引用原任务标题，使隐藏文字后的卡片仍有可读的无障碍名称。
     for (const card of document.querySelectorAll(task.card)) {
       const type = card.querySelector('.grtc-task__class');
