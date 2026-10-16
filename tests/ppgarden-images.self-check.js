@@ -41,6 +41,7 @@
     assert(source.getBoundingClientRect().top > innerHeight, '图片位于屏幕下方的懒加载区域');
     const button = document.querySelector('#ppg-layout-export');
     button.click();
+    document.querySelector('#ppg-layout-sync-warning:not([hidden]) [data-warning="continue"]')?.click();
     const deadline = performance.now() + 20000;
     while (button.disabled && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
     assert(!button.disabled && download && !document.querySelector('#ppg-layout-export-status').textContent.includes('失败'), '实际带图PNG生成成功');
