@@ -92,6 +92,7 @@
     const panelHidden = panel.hidden;
     expectedTheme = themeInput.checked ? 'dark' : 'light';
     (quick ? quickCopyButton : copy ? copyButton : button).click();
+    document.querySelector('#ppg-layout-sync-warning:not([hidden]) [data-warning="continue"]')?.click();
     assert(button.disabled && copyButton.disabled && quickCopyButton.disabled, '生成时三个截图按钮同步禁用');
     quickCopyButton.click();
     const deadline = performance.now() + 30000;
