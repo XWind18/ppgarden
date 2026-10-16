@@ -32,6 +32,7 @@
     title.scrollWidth <= title.clientWidth + 1 && title.scrollHeight <= title.clientHeight + 1);
   const take = async button => {
     button.click();
+    document.querySelector('#ppg-layout-sync-warning:not([hidden]) [data-warning="continue"]')?.click();
     const deadline = performance.now() + 30000;
     while (copy.disabled && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
     assert(!copy.disabled && !panel.querySelector('#ppg-layout-export-status').textContent.includes('失败'), '长图生成成功并恢复按钮');
