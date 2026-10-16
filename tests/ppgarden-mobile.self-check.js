@@ -113,6 +113,7 @@
     const copy = document.querySelector('#ppg-layout-quick-copy');
     const take = async button => {
       button.click();
+      document.querySelector('#ppg-layout-sync-warning:not([hidden]) [data-warning="continue"]')?.click();
       const deadline = performance.now() + 30000;
       while (copy.disabled && performance.now() < deadline) await tick();
       assert(!copy.disabled && !document.querySelector('#ppg-layout-export-status').textContent.includes('失败'), '截图完成并恢复按钮');
