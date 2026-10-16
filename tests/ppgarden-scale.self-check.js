@@ -32,6 +32,7 @@
   const take = async (copy = false, nextScale) => {
     expectedScale = Number(scale.value);
     (copy ? quickCopy : exportButton).click();
+    document.querySelector('#ppg-layout-sync-warning:not([hidden]) [data-warning="continue"]')?.click();
     if (nextScale !== undefined) choose(nextScale);
     const deadline = performance.now() + 30000;
     while (exportButton.disabled && performance.now() < deadline) await tick();
