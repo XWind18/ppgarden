@@ -30,6 +30,7 @@
     const copy = document.querySelector('#ppg-layout-quick-copy');
     assert(panel.hidden && !copy.hidden, '关闭配置后右下角复制按钮保持可用');
     copy.click();
+    document.querySelector('#ppg-layout-sync-warning:not([hidden]) [data-warning="continue"]')?.click();
     const copyDeadline = performance.now() + 30000;
     while (copy.disabled && performance.now() < copyDeadline) await tick();
     const status = document.querySelector('#ppg-layout-quick-status');
