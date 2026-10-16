@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         云上花匠 · 任务卡片显示设置
 // @namespace    https://ppgarden.top/
-// @version      1.8.10
+// @version      1.8.11
 // @description  新版／经典版任务卡片与三张时间卡片，适配 iOS；支持设置历史与自动恢复、高清长图导出复制、截图深浅色、卡片尺寸、信息显示与筛选。
 // @homepageURL  https://github.com/XWind18/ppgarden
 // @supportURL   https://github.com/XWind18/ppgarden/issues
@@ -201,6 +201,54 @@
       font: 14px/1.6 system-ui, sans-serif; box-shadow: 0 16px 60px #0005;
     }
     #ppg-layout-panel[hidden] { display: none !important; }
+    #ppg-layout-sync-warning {
+      --ppg-warning: #9a5b10; --ppg-warning-bg: #fff4df;
+      position: fixed; inset: 0; z-index: 2147483647; display: grid; place-items: center;
+      background: #111c2c80; backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+    }
+    #ppg-layout-sync-warning[hidden] { display: none !important; }
+    #ppg-layout-sync-warning .ppg-warning-card {
+      position: relative; box-sizing: border-box; width: min(420px, calc(100vw - 32px)); max-height: calc(100dvh - 32px);
+      padding: 24px; overflow: auto; overscroll-behavior: contain;
+      border: 1px solid var(--paper-line, #d9e1df); border-radius: 20px;
+      background: var(--paper-card, #fff); color: var(--ink, #24333e);
+      font: 14px/1.6 system-ui, sans-serif; box-shadow: 0 24px 80px #0004; text-align: left;
+    }
+    :root[data-theme="dark"] #ppg-layout-sync-warning { --ppg-warning: #efbf78; --ppg-warning-bg: #423425; }
+    #ppg-layout-sync-warning header { display: flex; align-items: center; gap: 12px; padding-right: 24px; }
+    #ppg-layout-sync-warning .ppg-warning-icon {
+      display: grid; place-items: center; flex: none; width: 42px; height: 42px;
+      border-radius: 14px; background: var(--ppg-warning-bg); color: var(--ppg-warning);
+    }
+    #ppg-layout-sync-warning h2 { margin: 0; color: inherit; font: 650 18px/1.4 system-ui, sans-serif; }
+    #ppg-layout-sync-warning header small { display: block; margin-top: 2px; color: var(--ink-muted, #657482); font-size: 12px; }
+    #ppg-layout-sync-warning p { margin: 18px 0 0; font-size: 13px; }
+    #ppg-layout-sync-warning .ppg-warning-times { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 18px 0; }
+    #ppg-layout-sync-warning .ppg-warning-times > div {
+      min-width: 0; padding: 12px; border: 1px solid var(--paper-line, #d9e1df);
+      border-radius: 12px; background: var(--paper-inner, #f5f7f7);
+    }
+    #ppg-layout-sync-warning .ppg-warning-times span { display: block; margin-bottom: 6px; color: var(--ink-muted, #657482); font-size: 12px; }
+    #ppg-layout-sync-warning .ppg-warning-times strong {
+      display: block; font: 600 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-variant-numeric: tabular-nums; white-space: pre-line; overflow-wrap: anywhere;
+    }
+    #ppg-layout-sync-warning .ppg-warning-times > div:first-child { border-color: var(--ppg-warning); }
+    #ppg-layout-sync-warning .ppg-warning-times > div:first-child strong { color: var(--ppg-warning); }
+    #ppg-layout-sync-warning #ppg-layout-warning-tip { margin: 0; color: var(--ink-muted, #657482); font-size: 12px; }
+    #ppg-layout-sync-warning footer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 22px; }
+    #ppg-layout-sync-warning button {
+      min-width: 0; min-height: 44px; margin: 0; padding: 10px 14px; border: 1px solid var(--paper-line, #d9e1df);
+      border-radius: 10px; background: var(--paper-card, #fff); color: inherit; font: 600 14px/1.4 system-ui, sans-serif; cursor: pointer;
+    }
+    #ppg-layout-sync-warning [data-warning="continue"] { border-color: #356b55; background: #356b55; color: #fff; }
+    #ppg-layout-sync-warning [data-warning="close"] {
+      position: absolute; top: 12px; right: 12px; width: 44px; padding: 0; border: 0; background: none;
+      color: var(--ink-muted, #657482); font-size: 24px; font-weight: 400;
+    }
+    #ppg-layout-sync-warning button:hover { filter: brightness(.96); }
+    #ppg-layout-sync-warning button:focus-visible { outline: 2px solid var(--green, #438466); outline-offset: 3px; }
+    @media (max-width: 380px) { #ppg-layout-sync-warning .ppg-warning-card { padding: 20px; } #ppg-layout-sync-warning h2 { font-size: 17px; } }
     #ppg-layout-panel:has(.ppg-export:not([hidden])) {
       bottom: calc(var(--ppg-layout-bottom) + 112px);
       max-height: calc(100dvh - var(--ppg-layout-bottom) - 136px);
@@ -569,7 +617,61 @@
   quickStatus.setAttribute('role', 'status');
   quickStatus.setAttribute('aria-live', 'polite');
   quickCopyButton.setAttribute('aria-describedby', quickStatus.id);
-  document.body.append(panel, button, quickCopyButton, quickStatus);
+  const syncWarning = document.createElement('div');
+  syncWarning.id = 'ppg-layout-sync-warning';
+  syncWarning.hidden = true;
+  syncWarning.dataset.html2canvasIgnore = 'true';
+  syncWarning.setAttribute('role', 'dialog');
+  syncWarning.setAttribute('aria-modal', 'true');
+  syncWarning.setAttribute('aria-labelledby', 'ppg-layout-warning-heading');
+  syncWarning.setAttribute('aria-describedby', 'ppg-layout-warning-message ppg-layout-warning-tip');
+  syncWarning.innerHTML = `
+    <div class="ppg-warning-card">
+    <button type="button" data-warning="close" aria-label="关闭提醒">×</button>
+    <header>
+      <span class="ppg-warning-icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg></span>
+      <div><h2 id="ppg-layout-warning-heading">任务数据可能已过期</h2><small>截图前检查 · 同步时间</small></div>
+    </header>
+    <p id="ppg-layout-warning-message"></p>
+    <div class="ppg-warning-times">
+      <div><span>同步时间</span><strong data-warning="synced"></strong></div>
+      <div><span>当前时间</span><strong data-warning="current"></strong></div>
+    </div>
+    <p id="ppg-layout-warning-tip">建议先同步任务，确保长图内容准确。</p>
+    <footer><button type="button" data-warning="cancel">取消截图</button><button type="button" data-warning="continue">仍然复制</button></footer>
+    </div>
+  `;
+  let warningTrigger;
+  let warningOverflow;
+  function closeSyncWarning() {
+    syncWarning.hidden = true;
+    document.body.style.overflow = warningOverflow;
+    if (warningTrigger?.isConnected) warningTrigger.focus({ preventScroll: true });
+  }
+  function cancelScreenshot() {
+    closeSyncWarning();
+    setExportStatus('已取消截图，请先同步任务后重试。');
+  }
+  for (const control of syncWarning.querySelectorAll('[data-warning="cancel"], [data-warning="close"]')) {
+    control.addEventListener('click', cancelScreenshot);
+  }
+  syncWarning.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); cancelScreenshot(); }
+    if (event.key !== 'Tab') return;
+    const controls = [...syncWarning.querySelectorAll('button')];
+    const target = event.shiftKey ? controls.at(-1) : controls[0];
+    if (document.activeElement === (event.shiftKey ? controls[0] : controls.at(-1))) {
+      event.preventDefault();
+      target.focus();
+    }
+  });
+  syncWarning.querySelector('[data-warning="continue"]').addEventListener('click', () => {
+    const copy = syncWarning.dataset.copy === 'true';
+    closeSyncWarning();
+    // 直接在确认按钮的点击中复制，保留 Safari 的剪贴板权限。
+    exportLongImage(copy, true);
+  });
+  document.body.append(panel, button, quickCopyButton, quickStatus, syncWarning);
   const pendingToggle = document.createElement('button');
   pendingToggle.id = 'ppg-layout-pending-toggle';
   pendingToggle.type = 'button';
@@ -784,6 +886,19 @@
     return value || '未获取';
   }
 
+  function parseSyncTime(value, now) {
+    const parts = value.match(/^(?:(\d{4})[-/])?(\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (!parts) return null;
+    const [, year, month, day, hour, minute, second = '0'] = parts;
+    // 原页面不含年份时取最近的有效日期，避免元旦把上一年误判成未来。
+    const years = year ? [Number(year)] : [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1];
+    const dates = years.map(value => new Date(value, Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)))
+      .filter(date => years.includes(date.getFullYear()) && date.getMonth() === Number(month) - 1
+        && date.getDate() === Number(day) && date.getHours() === Number(hour)
+        && date.getMinutes() === Number(minute) && date.getSeconds() === Number(second));
+    return dates.sort((a, b) => Math.abs(now - a) - Math.abs(now - b))[0] ?? null;
+  }
+
   function nextTaskRefresh(grid, now) {
     const pending = grid.querySelectorAll(':scope > .grtc-task--pending');
     if (!pending.length) return '暂无待刷新任务';
@@ -901,8 +1016,8 @@
     }
   }
 
-  async function exportLongImage(copy = false) {
-    if (exportButton.disabled) return;
+  async function exportLongImage(copy = false, confirmed = false) {
+    if (exportButton.disabled || !syncWarning.hidden) return;
     syncPage();
     if (activePage !== task) return;
     const grid = document.querySelector(task.grid);
@@ -910,6 +1025,26 @@
       .filter(card => { const rect = card.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; }) : [];
     if (!cards.length) {
       setExportStatus('没有符合当前筛选条件的卡片，请调整筛选后重试。');
+      return;
+    }
+
+    const now = new Date();
+    const syncedText = syncTimeValue(task, grid);
+    const syncedAt = parseSyncTime(syncedText, now);
+    const warning = !syncedAt ? '未能识别任务同步时间，无法确认数据是否为最新。'
+      : Math.abs(now - syncedAt) > 5 * 60 * 1000 ? '任务同步时间与当前时间相差超过5分钟，数据可能已过期。' : '';
+    if (warning && !confirmed) {
+      syncWarning.querySelector('h2').textContent = syncedAt ? '任务数据可能已过期' : '请核对任务同步时间';
+      syncWarning.querySelector('#ppg-layout-warning-message').textContent = warning;
+      syncWarning.querySelector('[data-warning="synced"]').textContent = (syncedAt ? formatTime(syncedAt) : syncedText).replace(' ', '\n');
+      syncWarning.querySelector('[data-warning="current"]').textContent = formatTime(now).replace(' ', '\n');
+      syncWarning.querySelector('[data-warning="continue"]').textContent = copy ? '仍然复制' : '仍然导出';
+      syncWarning.dataset.copy = String(copy);
+      warningTrigger = document.activeElement;
+      warningOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      syncWarning.hidden = false;
+      syncWarning.querySelector('[data-warning="cancel"]').focus({ preventScroll: true });
       return;
     }
 
