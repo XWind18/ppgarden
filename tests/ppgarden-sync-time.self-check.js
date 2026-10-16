@@ -26,6 +26,8 @@
   const capture = async copy => {
     expectedSync = source.textContent.replace('最近同步：', '');
     (copy ? quickCopy : exportButton).click();
+    const warning = document.querySelector('#ppg-layout-sync-warning');
+    if (warning && !warning.hidden) warning.querySelector('[data-warning="continue"]').click();
     const deadline = performance.now() + 30000;
     while (exportButton.disabled && performance.now() < deadline) await tick();
     assert(!exportButton.disabled && document.querySelector('#ppg-layout-export-status').textContent.includes(copy ? '已复制' : '已导出'),
