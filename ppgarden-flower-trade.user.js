@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         云上花匠 · 花朵交易助手
 // @namespace    https://ppgarden.top/
-// @version      1.1.3
+// @version      1.1.4
 // @description  在花朵交易页用独立悬浮窗，按账号、每组出价从高到低列出可交易花朵、实得时长、库存和可卖组数。
 // @homepageURL  https://github.com/XWind18/ppgarden
 // @supportURL   https://github.com/XWind18/ppgarden/issues
@@ -64,11 +64,13 @@
     #ppg-trade-panel .pt-refresh-settings input { width: 64px; min-height: 44px; border: 1px solid var(--pt-line); border-radius: 8px; padding: 6px;
       background: var(--pt-inner); color: var(--pt-ink); font: inherit; text-align: center; }
     #ppg-trade-panel .pt-pacing { color: var(--pt-muted); font-size: 11px; }
+    #ppg-trade-panel .pt-price-range { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+    #ppg-trade-panel [data-trade="restart"][hidden], #ppg-trade-progress[hidden] { display: none !important; }
     #ppg-trade-panel button:disabled { opacity: .55; cursor: wait; }
     :is(#ppg-trade-open, #ppg-trade-panel button, #ppg-trade-panel summary):focus-visible {
       outline: 2px solid var(--pt-green); outline-offset: 2px;
     }
-    #ppg-trade-status, #ppg-trade-daily-status { margin: 0; padding: 0 16px 12px; color: var(--pt-muted); font-size: 12px; overflow-wrap: anywhere; }
+    #ppg-trade-status, #ppg-trade-daily-status, #ppg-trade-progress { margin: 0; padding: 0 16px 12px; color: var(--pt-muted); font-size: 12px; overflow-wrap: anywhere; }
     #ppg-trade-daily-status { color: var(--pt-green); }
     #ppg-trade-status[data-error="true"] { color: #a35519; }
     :root[data-theme="dark"] #ppg-trade-status[data-error="true"] { color: #f2bd84; }
@@ -101,6 +103,7 @@
       #ppg-trade-panel { right: 12px; width: calc(100vw - 24px); }
       #ppg-trade-panel header { padding: 10px 12px 6px; }
       #ppg-trade-panel h2 { font-size: 17px; }
+      #ppg-trade-panel .pt-refresh-settings input { font-size: 16px; }
       #ppg-trade-results li { padding: 10px; }
     }
   `;
@@ -119,11 +122,15 @@
   panel.setAttribute('aria-modal', 'false');
   panel.setAttribute('aria-labelledby', 'ppg-trade-title');
   panel.innerHTML = `
-    <header><h2 id="ppg-trade-title">可交易花朵</h2><button type="button" data-trade="refresh">刷新列表</button><button type="button" data-trade="close" aria-label="关闭交易悬浮窗">×</button></header>
+    <header><h2 id="ppg-trade-title">可交易花朵</h2><button type="button" data-trade="refresh">刷新列表</button><button type="button" data-trade="restart" hidden>重新查询</button><button type="button" data-trade="close" aria-label="关闭交易悬浮窗">×</button></header>
     <div class="pt-refresh-settings"><button type="button" data-trade="auto-refresh" role="switch" aria-label="每10分钟自动刷新" aria-checked="false">自动刷新：关闭</button>
       <label>间隔 <input type="number" data-trade="refresh-minutes" aria-label="自动刷新间隔（分钟，最小3分钟）" min="3" step="1" value="10" inputmode="numeric"> 分钟</label>
       <span class="pt-pacing">请求依次读取 · 每次间隔 2～3 秒（含随机延迟）</span></div>
+    <div class="pt-refresh-settings"><span class="pt-price-range"><label>出价 <input type="number" data-trade="min-price" aria-label="最低求购出价（分钟/组）" min="1" step="1" placeholder="不限" inputmode="numeric"></label>
+      <span>～</span><label><input type="number" data-trade="max-price" aria-label="最高求购出价（分钟/组）" min="1" step="1" placeholder="不限" inputmode="numeric"> 分钟/组</label></span>
+      <span class="pt-pacing">先按出价筛选，再查询实得；留空表示不限。</span></div>
     <p id="ppg-trade-daily-status" role="status" aria-live="polite" hidden></p>
+    <p id="ppg-trade-progress" hidden></p>
     <p id="ppg-trade-status" role="status" aria-live="polite">按账号分组 · 每组出价从高到低</p>
     <div id="ppg-trade-results" aria-busy="false"></div>
     <footer>点花名定位求购；点「卖给他／接单」打开原站确认并预选账号。切换页面保留列表，可手动刷新；成交前由网站重新核验。</footer>
@@ -138,6 +145,20 @@
   const status = panel.querySelector('#ppg-trade-status');
   const results = panel.querySelector('#ppg-trade-results');
   const refreshButton = panel.querySelector('[data-trade="refresh"]');
+  const restartButton = panel.querySelector('[data-trade="restart"]');
+  const progressStatus = panel.querySelector('#ppg-trade-progress');
+  const priceInputs = [panel.querySelector('[data-trade="min-price"]'), panel.querySelector('[data-trade="max-price"]')];
+  const priceRangeKey = 'ppg-trade-price-range-v1';
+  const checkpointKey = 'ppg-trade-checkpoint-v1';
+  const checkpointLifetime = 30 * 60000;
+  let priceRange = [20, 144];
+  let checkpoint;
+  let checkpointSaveWarned = false;
+  try {
+    const saved = JSON.parse(localStorage.getItem(priceRangeKey));
+    if (validPriceRange(saved)) priceRange = saved;
+  } catch {}
+  priceInputs.forEach((input, index) => { input.value = priceRange[index] ?? ''; });
   const autoRefreshButton = panel.querySelector('[data-trade="auto-refresh"]');
   const refreshMinutesInput = panel.querySelector('[data-trade="refresh-minutes"]');
   const dailyStatus = panel.querySelector('#ppg-trade-daily-status');
@@ -174,6 +195,59 @@
   let noticeTimer;
   let nextRequestAt = 0;
   let retryAt = 0;
+
+  function validPriceRange(value) {
+    return Array.isArray(value) && value.length === 2
+      && value.every(price => price === null || Number.isSafeInteger(price) && price > 0)
+      && (value[0] === null || value[1] === null || value[0] <= value[1]);
+  }
+
+  function syncResumeControls() {
+    refreshButton.textContent = controller ? '读取中…' : checkpoint ? '继续读取' : '刷新列表';
+    restartButton.hidden = !checkpoint || !!controller;
+    progressStatus.hidden = !checkpoint;
+    if (checkpoint) progressStatus.textContent = `断点已保存 ${checkpoint.responses.size} 项读取 · ${new Date(checkpoint.startedAt).toLocaleTimeString('zh-CN', { hour12: false })} 开始 · 30分钟内可继续`;
+  }
+
+  function saveCheckpoint() {
+    if (!checkpoint) return;
+    try { localStorage.setItem(checkpointKey, JSON.stringify({ ...checkpoint, responses: [...checkpoint.responses], retryAt, nextRequestAt })); }
+    catch {
+      if (!checkpointSaveWarned) notify('浏览器无法保存断点，当前页面内仍可续拉；重新加载网页后需重新读取。');
+      checkpointSaveWarned = true;
+    }
+    syncResumeControls();
+  }
+
+  function clearCheckpoint() {
+    checkpoint = null;
+    try {
+      if (retryAt > Date.now()) localStorage.setItem(checkpointKey, JSON.stringify({ retryAt }));
+      else localStorage.removeItem(checkpointKey);
+    } catch {}
+    syncResumeControls();
+  }
+
+  function loadCheckpoint() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(checkpointKey));
+      if (!saved) return;
+      if (Number.isFinite(saved.retryAt) && saved.retryAt > 0) retryAt = saved.retryAt;
+      if (!Number.isFinite(saved.startedAt) || saved.startedAt <= 0 || saved.startedAt > Date.now()
+        || Date.now() - saved.startedAt >= checkpointLifetime || tradeDay(saved.startedAt) !== pauseDay || typeof saved.manual !== 'boolean'
+        || !validPriceRange(saved.prices) || saved.prices.some((price, index) => price !== priceRange[index])
+        || !Array.isArray(saved.responses) || !saved.responses.every(item => Array.isArray(item) && item.length === 2
+          && typeof item[0] === 'string' && /^\/api\/trade\/(?:meta$|requests\?|listings\?|requests\/[1-9]\d*\/sell-quote$)/.test(item[0])
+          && item[1] && typeof item[1] === 'object' && (item[1].status === 404 || item[1].status === 409
+            || item[1].data && typeof item[1].data === 'object'))) {
+        clearCheckpoint();
+        return;
+      }
+      checkpoint = { startedAt: saved.startedAt, manual: saved.manual, prices: saved.prices, responses: new Map(saved.responses) };
+      if (Number.isFinite(saved.nextRequestAt)) nextRequestAt = Math.min(saved.nextRequestAt, Date.now() + 3000);
+    } catch { clearCheckpoint(); }
+    syncResumeControls();
+  }
 
   function syncAutoRefreshButton() {
     autoRefreshButton.setAttribute('aria-checked', String(autoRefresh));
@@ -212,7 +286,7 @@
       if (autoRefresh) refreshTimer = setTimeout(scheduleRefresh, (pauseDay + 1) * dayLength - 8 * 3600000 - Date.now());
       return;
     }
-    if (!nextRefreshAt || autoRefresh && nextRefreshAt <= Date.now() && retryAt <= Date.now()) {
+    if ((!nextRefreshAt || autoRefresh && nextRefreshAt <= Date.now()) && retryAt <= Date.now()) {
       refresh();
     } else if (autoRefresh) {
       refreshTimer = setTimeout(scheduleRefresh, Math.min(2147483647, Math.max(0, nextRefreshAt - Date.now(), retryAt - Date.now())));
@@ -258,6 +332,16 @@
   }
 
   async function readJSON(path, signal) {
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+    const cached = path !== '/api/trade/meta' && checkpoint?.responses.get(path);
+    if (cached) {
+      if (cached.status) {
+        const error = new Error('求购已变动。');
+        error.status = cached.status;
+        throw error;
+      }
+      return cached.data;
+    }
     await pause(Math.max(0, nextRequestAt - Date.now()), signal);
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
     const request = new AbortController();
@@ -282,9 +366,11 @@
       if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('未读到交易数据，请检查登录状态。');
       const value = await response.json();
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      checkpoint?.responses.set(path, { data: value });
       return value;
     } catch (error) {
       if (signal.aborted) throw error;
+      if (error.status === 404 || error.status === 409) checkpoint?.responses.set(path, { status: error.status });
       if (request.signal.aborted) throw new Error('读取超时，请稍后刷新列表。');
       if (error instanceof TypeError) throw new Error('网络读取失败，请检查网络后重试。');
       throw error;
@@ -292,6 +378,7 @@
       nextRequestAt = Date.now() + 2000 + Math.floor(Math.random() * 1001);
       clearTimeout(timeout);
       signal.removeEventListener('abort', abort);
+      saveCheckpoint();
     }
   }
 
@@ -483,6 +570,13 @@
     }
     clearTimeout(refreshTimer);
     resetTradeDay();
+    if (checkpoint && (Date.now() - checkpoint.startedAt >= checkpointLifetime || checkpoint.startedAt > Date.now()
+      || tradeDay(checkpoint.startedAt) !== pauseDay)) {
+      clearCheckpoint();
+      notify('断点超过30分钟或已跨天，已重新读取当前交易数据。');
+    }
+    checkpoint ||= { startedAt: Date.now(), manual, prices: [...priceRange], responses: new Map() };
+    manual = checkpoint.manual;
     const day = pauseDay;
     const run = new AbortController();
     controller = run;
@@ -495,12 +589,23 @@
     results.setAttribute('aria-busy', 'true');
     status.dataset.error = 'false';
     status.textContent = '正在读取账号与交易状态…';
+    syncResumeControls();
     try {
+      const previousMeta = checkpoint.responses.get('/api/trade/meta')?.data;
       const meta = await readJSON('/api/trade/meta', run.signal);
       if (run.signal.aborted) return;
       if (meta.allowed !== true || meta.enabled !== true) throw new Error('当前账号暂时不能使用花朵交易。');
       if (!Array.isArray(meta.gardens) || !Array.isArray(meta.flowers) || !Array.isArray(meta.channels)
         || !positiveInt(meta.limits?.groupSize)) throw new Error('交易数据格式已变化，请更新脚本。');
+      const scope = value => JSON.stringify([value.gardens.map(garden => [garden?.gardenId, garden?.channel, garden?.pause]),
+        value.channels, value.flowers, value.limits, value.userControl, value.teamWindow?.active, value.controlsUnavailable]);
+      if (previousMeta && (!Array.isArray(previousMeta.gardens) || scope(previousMeta) !== scope(meta))) {
+        checkpoint.responses.clear();
+        checkpoint.responses.set('/api/trade/meta', { data: meta });
+        checkpoint.startedAt = Date.now();
+        saveCheckpoint();
+        notify('账号或交易规则已变化，已重新读取，避免沿用旧断点。');
+      }
       const accountOrder = [...document.querySelectorAll('[data-account-row]')].map(node => node.getAttribute('data-account-row'));
       const flowers = new Map(meta.flowers.filter(item => positiveInt(item.flowerId) && qualityNames[item.quality]
         && typeof item.name === 'string').map(item => [flowerKey(item), item]));
@@ -545,6 +650,8 @@
           return item.channel === channel && item.mine === false && !ownIds.has(item.buyerGardenId)
             && item.status === 'open' && Number.isFinite(item.expiresAt) && item.expiresAt > Date.now()
             && positiveInt(item.pricePerGroup) && positiveInt(item.groups) && !item.pausedReason
+            && (priceRange[0] === null || item.pricePerGroup >= priceRange[0])
+            && (priceRange[1] === null || item.pricePerGroup <= priceRange[1])
             && !item.buyerPlaying && !item.buyerQueueFull && !item.progress?.satisfied && !item.progress?.reached
             && stocked.has(flowerKey(item)) && flowers.has(flowerKey(item));
         }).sort((a, b) => b.pricePerGroup - a.pricePerGroup || a.expiresAt - b.expiresAt);
@@ -598,30 +705,37 @@
       if (run.signal.aborted) return;
       render(groups);
       const count = results.querySelectorAll('li').length;
-      const at = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-      status.textContent = `${groups.length} 个账号 · ${count} 项可交易 · 按出价降序 · ${at} 更新`
+      const startedAt = new Date(checkpoint.startedAt).toLocaleTimeString('zh-CN', { hour12: false });
+      const at = new Date(Date.now()).toLocaleTimeString('zh-CN', { hour12: false });
+      status.textContent = `${groups.length} 个账号 · ${count} 项可交易 · 按出价降序 · 本轮 ${startedAt} 开始 · ${at} 完成`
+        + (priceRange.some(price => price !== null) ? ` · 出价 ${priceRange[0] ?? '不限'}～${priceRange[1] ?? '不限'} 分钟/组` : '')
         + (checked ? ` · 已核验 ${checked} 张求购` : '')
         + (lowerSkipped ? ` · 跳过 ${lowerSkipped} 张较低报价` : '')
         + (skipped ? ` · ${skipped} 张求购已变动，未列入` : '')
         + (truncated ? ' · 网站返回的求购不完整，结果仅覆盖已返回部分' : '');
       if (!groups.length) status.textContent = '没有读取到可用的游戏账号，请确认账号已绑定。';
       if (truncated || skipped) status.dataset.error = 'true';
+      clearCheckpoint();
     } catch (error) {
       if (run.signal.aborted) return;
       render(groups);
       status.dataset.error = 'true';
       status.textContent = `读取未完成：${error.message || '请稍后重试。'}`
         + (results.querySelector('li') ? ' 下方是部分核验结果，请刷新后查看完整列表。' : '');
+      if (error.status === 401 || error.status === 403 || /格式已变化|不能使用花朵交易/.test(error.message)) clearCheckpoint();
     } finally {
       if (controller === run) {
         if (run.signal.aborted) {
           status.dataset.error = 'true';
-          status.textContent = '查询已暂停，已保留现有列表；可点「刷新列表」重新读取。';
+          status.textContent = checkpoint ? '查询已暂停，已保留现有列表和断点；重新打开或点「继续读取」接着查询。'
+            : '查询已取消，请按当前价格范围重新读取。';
         }
         nextRefreshAt = Date.now() + refreshInterval;
         controller = null;
         refreshButton.disabled = false;
         results.setAttribute('aria-busy', 'false');
+        saveCheckpoint();
+        syncResumeControls();
         scheduleRefresh();
       }
     }
@@ -641,10 +755,30 @@
     panel.hidden = false;
     openButton.setAttribute('aria-expanded', 'true');
     panel.querySelector('[data-trade="close"]').focus({ preventScroll: true });
-    scheduleRefresh();
+    if (checkpoint && (!allDailyPaused || checkpoint.manual)) refresh();
+    else scheduleRefresh();
   });
   panel.querySelector('[data-trade="close"]').addEventListener('click', close);
   refreshButton.addEventListener('click', () => refresh(true));
+  restartButton.addEventListener('click', () => { clearCheckpoint(); refresh(true); });
+  for (const input of priceInputs) input.addEventListener('change', () => {
+    const value = priceInputs.map(field => field.value.trim() === '' ? null : Number(field.value));
+    if (!validPriceRange(value)) {
+      priceInputs.forEach((field, index) => { field.value = priceRange[index] ?? ''; });
+      notify('出价请输入大于0的整数，最低价不能高于最高价；留空表示不限。');
+      return;
+    }
+    if (value.every((price, index) => price === priceRange[index])) return;
+    priceRange = value;
+    controller?.abort();
+    clearCheckpoint();
+    results.replaceChildren();
+    nextRefreshAt = Date.now() + refreshInterval;
+    try { localStorage.setItem(priceRangeKey, JSON.stringify(priceRange)); }
+    catch { notify('价格范围已生效，但当前浏览器无法保存。'); }
+    status.textContent = '价格范围已保存，点击「刷新列表」按新范围查询。';
+    scheduleRefresh();
+  });
   autoRefreshButton.addEventListener('click', () => {
     autoRefresh = !autoRefresh;
     try { localStorage.setItem(autoRefreshKey, String(autoRefresh)); }
@@ -668,9 +802,11 @@
     scheduleRefresh();
   });
   syncAutoRefreshButton();
+  loadCheckpoint();
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) controller?.abort();
-    scheduleRefresh();
+    if (!document.hidden && !panel.hidden && !openButton.hidden && checkpoint && (!allDailyPaused || checkpoint.manual)) refresh();
+    else scheduleRefresh();
   });
   panel.addEventListener('keydown', event => {
     if (event.key === 'Escape') { event.preventDefault(); close(); }
