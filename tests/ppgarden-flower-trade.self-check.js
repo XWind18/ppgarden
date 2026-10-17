@@ -12,10 +12,13 @@
   const dailyPauses = () => JSON.parse(localStorage.getItem('ppg-trade-daily-pause-v1'))?.accounts || [];
   const nativeSetTimeout = window.setTimeout.bind(window);
   const nativeClearTimeout = window.clearTimeout.bind(window);
+  const nativeRandom = Math.random;
+  let randomIndex = 0;
+  Math.random = () => [0, .5, .999999][randomIndex++ % 3];
   const timers = new Map();
   window.setTimeout = (callback, delay = 0, ...args) => {
     const id = nativeSetTimeout(() => { timers.delete(id); callback(...args); }, delay);
-    timers.set(id, { at: Date.now() + Number(delay), run: () => callback(...args) });
+    timers.set(id, { at: Date.now() + Number(delay), delay: Number(delay), run: () => callback(...args) });
     return id;
   };
   window.clearTimeout = id => { timers.delete(id); nativeClearTimeout(id); };
@@ -32,7 +35,15 @@
     if (!condition) throw new Error(text);
     passed.push(text);
   };
-  const tick = () => new Promise(resolve => setTimeout(resolve, 40));
+  // 用模拟时间推进短等待；自动刷新周期仍由各用例显式推进。
+  const tick = async () => {
+    const next = Math.min(...[...timers.values()].filter(timer => timer.delay <= 3000).map(timer => timer.at));
+    if (next <= Date.now() + 3000) {
+      fixture.advance(Math.max(0, next - Date.now()));
+      flushTimers();
+    }
+    await new Promise(resolve => nativeSetTimeout(resolve, 40));
+  };
   const wait = async () => {
     for (let i = 0; i < 200 && results.getAttribute('aria-busy') === 'true'; i++) await tick();
     assert(results.getAttribute('aria-busy') === 'false', '读取结束后退出忙碌状态');
@@ -54,6 +65,7 @@
     assert(fixture && panel.tagName === 'DIV' && panel.hidden, '使用独立 div 悬浮窗，初始关闭');
     assert(!launcher.hidden && fixture.calls.length === 0, '仅在交易页显示入口，未打开时不读取接口');
     assert(autoRefresh.getAttribute('aria-checked') === 'false' && autoRefresh.textContent.includes('关闭'), '首次安装默认关闭自动刷新，并明确显示开关状态');
+    fixture.delay = 80;
     launcher.focus();
     launcher.click();
     assert(!panel.hidden && launcher.getAttribute('aria-expanded') === 'true', '点击入口打开悬浮窗');
@@ -89,8 +101,11 @@
     const ids = fixture.calls.filter(c => c.path.includes('sell-quote')).map(c => Number(c.path.match(/requests\/(\d+)/)[1]));
     assert(ids.join(',') === '1,2,3,4,5,21', '排除无库存、自有、过期、排队已满、游戏中、已满足、暂停及非法求购；重复单不重复读取');
     assert(status.textContent.includes('跳过 1 张较低报价'), '各有货账号都已有更高报价后，跳过同花更低价求购');
-    const quoteTimes = fixture.calls.filter(c => c.path.includes('sell-quote')).map(c => c.at);
-    assert(quoteTimes.slice(1).every((at, i) => at - quoteTimes[i] >= 700), '实际报价请求之间至少约800ms，避免瞬间连续读取');
+    const gaps = fixture.calls.slice(1).map((call, i) => call.clockAt - fixture.calls[i].finishedAt);
+    assert(gaps.every(gap => gap >= 2000), '账号、求购大厅、各账号库存及报价全部在上一次响应结束至少2秒后读取，无并发请求');
+    assert(gaps.every((gap, i) => gap >= [2000, 2500, 3000][i % 3] && gap < [2000, 2500, 3000][i % 3] + 250), '每次独立生成0至1秒随机附加延迟，验证随机最小、中间及最大边界');
+    assert(panel.querySelector('.pt-pacing').textContent.includes('2～3 秒'), '悬浮窗明确显示请求间隔与随机延迟');
+    fixture.delay = 0;
     assert(row('account-a', '1:5').querySelector('.pt-action').textContent === '接单'
       && row('account-b', '1:5').querySelector('.pt-action').textContent === '卖给他', '按求购类型显示接单或卖给他按钮');
     assert(fixture.calls.every(c => c.method === 'GET'), '所有数据读取仅用 GET');
@@ -123,9 +138,12 @@
     await wait();
     assert(fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1
       && fixture.calls.some(c => c.path.includes('sell-quote')), '满10分钟自动读取新数据，重复唤醒不会并发查询');
+    const previousRequest = fixture.calls.at(-1);
     await refresh('normal', false);
     assert(fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1
-      && fixture.calls.some(c => c.path.includes('/listings?')) && fixture.calls.some(c => c.path.includes('sell-quote')), '手动刷新立即重新读取账号、库存及报价，不复用旧接口数据');
+      && fixture.calls.some(c => c.path.includes('/listings?')) && fixture.calls.some(c => c.path.includes('sell-quote')), '手动刷新重新读取账号、库存及报价，不复用旧接口数据');
+    assert(fixture.calls[0].clockAt - previousRequest.finishedAt >= 2000
+      && fixture.calls.slice(1).every((call, i) => call.clockAt - fixture.calls[i].finishedAt >= 2000), '立即手动刷新仍遵守跨轮与轮内统一请求间隔');
     autoRefresh.click();
     assert(autoRefresh.getAttribute('aria-checked') === 'false' && autoRefresh.textContent.includes('关闭')
       && localStorage.getItem('ppg-trade-auto-refresh-v1') === 'false', '关闭自动刷新有清晰提示，且保存开关设置');
@@ -192,8 +210,20 @@
     await refresh('invalid-quote');
     assert(status.textContent.includes('核验数据格式已变化') && !results.querySelector('li'), '报价请求ID不匹配时停止使用数据');
     await refresh('normal');
+    fixture.calls.length = 0;
+    panel.querySelector('[data-trade="refresh"]').click();
+    panel.querySelector('[data-trade="close"]').click();
+    await tick();
+    fixture.advance(4000);
+    flushTimers();
+    await tick();
+    assert(fixture.calls.length === 0 && panel.hidden, '等待请求间隔时关闭窗口，取消等待且不发出后续请求');
+    launcher.click();
+    await tick();
+    assert(fixture.calls.length === 0 && results.querySelector('li'), '取消等待后重新打开不混入旧轮请求，保留现有结果');
     fixture.delay = 200;
     panel.querySelector('[data-trade="refresh"]').click();
+    await until(() => fixture.calls.length > 0);
     panel.querySelector('[data-trade="close"]').click();
     await tick();
     assert(panel.hidden && fixture.aborted > 0 && document.activeElement === launcher, '关闭时取消请求并恢复入口焦点');
@@ -363,5 +393,7 @@
   } catch (error) {
     output.textContent = `FAIL after ${passed.length}: ${error.message}`;
     console.error('[花朵交易自检]', error);
+  } finally {
+    Math.random = nativeRandom;
   }
 })();
