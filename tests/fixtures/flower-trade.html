@@ -55,6 +55,7 @@
     // 全范围覆盖低价、异常花名等用例；正常页面的新安装默认值为20～144。
     localStorage.setItem('ppg-trade-price-range-v1', '[null,null]');
     localStorage.removeItem('ppg-trade-checkpoint-v1');
+    localStorage.removeItem('ppg-trade-stock-cache-v1');
   }
   if (options.has('dark')) document.documentElement.dataset.theme = 'dark';
   const realNow = Date.now;
@@ -137,6 +138,8 @@
         data.quotaRemaining = 0; data.quotaCommittedGroups = 5; data.shelfFree = 0;
       }
       if (fixture.scenario === 'quota-old') { data.quotaToday = 0; data.gameReadAt -= 86400000; }
+      if (fixture.scenario === 'stock-old-sync') data.gameReadAt -= 2 * 86400000;
+      if (fixture.scenario === 'stock-sync-unknown') delete data.gameReadAt;
       if (fixture.scenario === 'invalid-stock') data.gardenId = 'wrong-account';
     } else if (url.pathname === '/api/trade/sellable-stock') {
       data = { items: [] };
@@ -229,11 +232,11 @@
   }
   renderSite();
 </script>
-<script src="../../ppgarden-flower-trade.user.js?v=1.1.4"></script>
+<script src="../../ppgarden-flower-trade.user.js?v=1.1.5"></script>
 <script>
   if (options.has('test')) {
     const check = document.createElement('script');
-    check.src = '../ppgarden-flower-trade.self-check.js?v=1.1.4';
+    check.src = '../ppgarden-flower-trade.self-check.js?v=1.1.5';
     document.body.append(check);
   }
 </script>
