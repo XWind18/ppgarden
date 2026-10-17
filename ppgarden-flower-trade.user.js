@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         云上花匠 · 花朵交易助手
 // @namespace    https://ppgarden.top/
-// @version      1.1.4
+// @version      1.1.5
 // @description  在花朵交易页用独立悬浮窗，按账号、每组出价从高到低列出可交易花朵、实得时长、库存和可卖组数。
 // @homepageURL  https://github.com/XWind18/ppgarden
 // @supportURL   https://github.com/XWind18/ppgarden/issues
@@ -98,6 +98,9 @@
     #ppg-trade-results .pt-locate:hover b { text-decoration: underline; text-underline-offset: 3px; }
     #ppg-trade-results .pt-action { padding: 8px; color: var(--pt-green); background: var(--pt-inner); white-space: nowrap; }
     #ppg-trade-results p { margin: 0; padding: 14px 12px; font-size: 12px; color: var(--pt-muted); overflow-wrap: anywhere; }
+    #ppg-trade-results .pt-cache { padding: 8px 12px; font-size: 11px; background: var(--pt-inner); }
+    #ppg-trade-results .pt-cache[data-stale="true"] { color: #a35519; }
+    :root[data-theme="dark"] #ppg-trade-results .pt-cache[data-stale="true"] { color: #f2bd84; }
     #ppg-trade-panel footer { padding: 10px 16px; border-top: 1px solid var(--pt-line); color: var(--pt-muted); font-size: 11px; }
     @media (max-width: 600px) {
       #ppg-trade-panel { right: 12px; width: calc(100vw - 24px); }
@@ -129,6 +132,7 @@
     <div class="pt-refresh-settings"><span class="pt-price-range"><label>出价 <input type="number" data-trade="min-price" aria-label="最低求购出价（分钟/组）" min="1" step="1" placeholder="不限" inputmode="numeric"></label>
       <span>～</span><label><input type="number" data-trade="max-price" aria-label="最高求购出价（分钟/组）" min="1" step="1" placeholder="不限" inputmode="numeric"> 分钟/组</label></span>
       <span class="pt-pacing">先按出价筛选，再查询实得；留空表示不限。</span></div>
+    <div class="pt-refresh-settings"><span class="pt-pacing">仓库按账号缓存 30 分钟 · 查询时过期重读</span><button type="button" data-trade="stock-refresh">更新仓库</button></div>
     <p id="ppg-trade-daily-status" role="status" aria-live="polite" hidden></p>
     <p id="ppg-trade-progress" hidden></p>
     <p id="ppg-trade-status" role="status" aria-live="polite">按账号分组 · 每组出价从高到低</p>
@@ -146,11 +150,16 @@
   const results = panel.querySelector('#ppg-trade-results');
   const refreshButton = panel.querySelector('[data-trade="refresh"]');
   const restartButton = panel.querySelector('[data-trade="restart"]');
+  const stockRefreshButton = panel.querySelector('[data-trade="stock-refresh"]');
   const progressStatus = panel.querySelector('#ppg-trade-progress');
   const priceInputs = [panel.querySelector('[data-trade="min-price"]'), panel.querySelector('[data-trade="max-price"]')];
   const priceRangeKey = 'ppg-trade-price-range-v1';
   const checkpointKey = 'ppg-trade-checkpoint-v1';
   const checkpointLifetime = 30 * 60000;
+  const stockCacheKey = 'ppg-trade-stock-cache-v1';
+  const stockCacheLifetime = 30 * 60000;
+  let stockCache = new Map();
+  let stockCacheSaveWarned = false;
   let priceRange = [20, 144];
   let checkpoint;
   let checkpointSaveWarned = false;
@@ -203,6 +212,7 @@
   }
 
   function syncResumeControls() {
+    stockRefreshButton.disabled = !!controller;
     refreshButton.textContent = controller ? '读取中…' : checkpoint ? '继续读取' : '刷新列表';
     restartButton.hidden = !checkpoint || !!controller;
     progressStatus.hidden = !checkpoint;
@@ -235,18 +245,69 @@
       if (Number.isFinite(saved.retryAt) && saved.retryAt > 0) retryAt = saved.retryAt;
       if (!Number.isFinite(saved.startedAt) || saved.startedAt <= 0 || saved.startedAt > Date.now()
         || Date.now() - saved.startedAt >= checkpointLifetime || tradeDay(saved.startedAt) !== pauseDay || typeof saved.manual !== 'boolean'
+        || saved.forceStock !== undefined && typeof saved.forceStock !== 'boolean'
         || !validPriceRange(saved.prices) || saved.prices.some((price, index) => price !== priceRange[index])
         || !Array.isArray(saved.responses) || !saved.responses.every(item => Array.isArray(item) && item.length === 2
           && typeof item[0] === 'string' && /^\/api\/trade\/(?:meta$|requests\?|listings\?|requests\/[1-9]\d*\/sell-quote$)/.test(item[0])
           && item[1] && typeof item[1] === 'object' && (item[1].status === 404 || item[1].status === 409
-            || item[1].data && typeof item[1].data === 'object'))) {
+            || item[1].data && typeof item[1].data === 'object')
+          && (item[1].readAt === undefined || Number.isFinite(item[1].readAt) && item[1].readAt > 0 && item[1].readAt <= Date.now()))) {
         clearCheckpoint();
         return;
       }
-      checkpoint = { startedAt: saved.startedAt, manual: saved.manual, prices: saved.prices, responses: new Map(saved.responses) };
+      checkpoint = { startedAt: saved.startedAt, manual: saved.manual, prices: saved.prices,
+        forceStock: saved.forceStock === true, responses: new Map(saved.responses) };
       if (Number.isFinite(saved.nextRequestAt)) nextRequestAt = Math.min(saved.nextRequestAt, Date.now() + 3000);
     } catch { clearCheckpoint(); }
     syncResumeControls();
+  }
+
+  function validStock(stock) {
+    return stock && typeof stock.gardenId === 'string' && stock.gardenId && typeof stock.channel === 'string'
+      && Array.isArray(stock.items) && stock.items.every(item => item && positiveInt(item.flowerId)
+        && qualityNames[item.quality] && nonnegativeInt(item.count));
+  }
+
+  function saveStockCache() {
+    try { localStorage.setItem(stockCacheKey, JSON.stringify([...stockCache])); }
+    catch {
+      if (!stockCacheSaveWarned) notify('浏览器无法保存仓库缓存，当前页面仍可复用；重新加载后需重新读取。');
+      stockCacheSaveWarned = true;
+    }
+  }
+
+  function loadStockCache() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(stockCacheKey));
+      if (Array.isArray(saved)) stockCache = new Map(saved.filter(item => Array.isArray(item) && item.length === 2
+        && typeof item[0] === 'string' && item[1] && validStock(item[1].stock) && item[1].stock.gardenId === item[0]
+        && Number.isFinite(item[1].readAt) && item[1].readAt > 0 && item[1].readAt <= Date.now()));
+    } catch {}
+  }
+
+  async function readStock(group, signal, force) {
+    const path = `/api/trade/listings?${new URLSearchParams({ gardenId: group.id })}`;
+    const completed = checkpoint.responses.get(path);
+    const cached = stockCache.get(group.id);
+    const reuse = !completed && !force && !dailyPauses.has(group.id) && cached?.stock.channel === group.channel
+      && cached.readAt <= Date.now() && Date.now() - cached.readAt < stockCacheLifetime
+      && tradeDay(cached.readAt) === pauseDay;
+    if (reuse) {
+      checkpoint.responses.set(path, { data: cached.stock, readAt: cached.readAt });
+      saveCheckpoint();
+    }
+    const stock = await readJSON(path, signal);
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+    if (!validStock(stock) || stock.gardenId !== group.id || stock.channel !== group.channel) {
+      throw new Error('库存或求购数据格式已变化，请更新脚本。');
+    }
+    const readAt = checkpoint.responses.get(path).readAt ?? checkpoint.startedAt;
+    stockCache.set(group.id, { readAt, stock });
+    saveStockCache();
+    group.stockReadAt = readAt;
+    group.stockSyncAt = stock.gameReadAt ?? stock.snapshotAt;
+    group.stockSource = reuse ? '仓库缓存' : completed ? '仓库断点' : '仓库读取';
+    return stock;
   }
 
   function syncAutoRefreshButton() {
@@ -366,7 +427,7 @@
       if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('未读到交易数据，请检查登录状态。');
       const value = await response.json();
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-      checkpoint?.responses.set(path, { data: value });
+      checkpoint?.responses.set(path, { data: value, readAt: Date.now() });
       return value;
     } catch (error) {
       if (signal.aborted) throw error;
@@ -455,6 +516,9 @@
         }
         setSelect(select, group.id);
         select.focus({ preventScroll: true });
+        stockCache.delete(group.id);
+        saveStockCache();
+        clearCheckpoint();
         notify(`已打开求购 #${row.requestId} · 请核对「${group.name}」后确认。`);
         return;
       }
@@ -522,6 +586,15 @@
       if (group.id === focusedAccount) nextFocus = summary;
       summary.append(textElement('strong', group.name), textElement('small', group.reason || `${rows.length} 种花`));
       details.append(summary);
+      if (group.stockReadAt) {
+        const format = at => new Date(at).toLocaleString('zh-CN', { hour12: false });
+        const syncKnown = Number.isFinite(group.stockSyncAt) && group.stockSyncAt > 0 && group.stockSyncAt <= Date.now() + 60000;
+        const stale = !syncKnown || Date.now() - group.stockSyncAt > stockCacheLifetime;
+        const info = textElement('p', `${group.stockSource} · ${format(group.stockReadAt)} 读取`
+          + ` · 原站同步 ${syncKnown ? format(group.stockSyncAt) : '时间未知'}` + (stale ? ' · 数据较早或时间未知，请留意原站同步' : ''), 'pt-cache');
+        info.dataset.stale = String(stale);
+        details.append(info);
+      }
       if (!rows.length) {
         details.append(textElement('p', group.reason ? dailyPauses.has(group.id)
           ? '已停止本账号当天的自动查询；仍可点「刷新列表」重新核对。' : `${group.reason}，请在原页面处理后刷新列表。`
@@ -562,7 +635,7 @@
     results.scrollTop = scrollTop;
   }
 
-  async function refresh(manual = false) {
+  async function refresh(manual = false, forceStock = false) {
     if (controller) return;
     if (retryAt > Date.now()) {
       notify(`查询过于频繁，请等待 ${Math.ceil((retryAt - Date.now()) / 1000)} 秒再刷新；当前结果已保留。`);
@@ -575,8 +648,9 @@
       clearCheckpoint();
       notify('断点超过30分钟或已跨天，已重新读取当前交易数据。');
     }
-    checkpoint ||= { startedAt: Date.now(), manual, prices: [...priceRange], responses: new Map() };
+    checkpoint ||= { startedAt: Date.now(), manual, forceStock, prices: [...priceRange], responses: new Map() };
     manual = checkpoint.manual;
+    forceStock = checkpoint.forceStock;
     const day = pauseDay;
     const run = new AbortController();
     controller = run;
@@ -599,17 +673,27 @@
         || !positiveInt(meta.limits?.groupSize)) throw new Error('交易数据格式已变化，请更新脚本。');
       const scope = value => JSON.stringify([value.gardens.map(garden => [garden?.gardenId, garden?.channel, garden?.pause]),
         value.channels, value.flowers, value.limits, value.userControl, value.teamWindow?.active, value.controlsUnavailable]);
-      if (previousMeta && (!Array.isArray(previousMeta.gardens) || scope(previousMeta) !== scope(meta))) {
+      const stockExpired = [...checkpoint.responses].some(([path, entry]) => path.startsWith('/api/trade/listings?')
+        && (Date.now() - (entry.readAt ?? checkpoint.startedAt) >= stockCacheLifetime
+          || tradeDay(entry.readAt ?? checkpoint.startedAt) !== pauseDay));
+      if (previousMeta && (stockExpired || !Array.isArray(previousMeta.gardens) || scope(previousMeta) !== scope(meta))) {
         checkpoint.responses.clear();
         checkpoint.responses.set('/api/trade/meta', { data: meta });
         checkpoint.startedAt = Date.now();
+        checkpoint.forceStock = forceStock = true;
+        stockCache.clear();
+        saveStockCache();
         saveCheckpoint();
-        notify('账号或交易规则已变化，已重新读取，避免沿用旧断点。');
+        notify(stockExpired ? '断点中的仓库缓存已过期，已重新读取交易数据。' : '账号或交易规则已变化，已重新读取，避免沿用旧断点。');
       }
       const accountOrder = [...document.querySelectorAll('[data-account-row]')].map(node => node.getAttribute('data-account-row'));
       const flowers = new Map(meta.flowers.filter(item => positiveInt(item.flowerId) && qualityNames[item.quality]
         && typeof item.name === 'string').map(item => [flowerKey(item), item]));
       const ownIds = new Set(meta.gardens.map(garden => garden.gardenId));
+      for (const [id, entry] of stockCache) {
+        if (!meta.gardens.some(garden => garden.gardenId === id && garden.channel === entry.stock.channel)) stockCache.delete(id);
+      }
+      saveStockCache();
       for (const garden of meta.gardens) {
         if (typeof garden.gardenId !== 'string' || !garden.gardenId || !meta.channels.includes(garden.channel)) continue;
         groups.push({ id: garden.gardenId, name: garden.nickname || garden.name || `账号 ${garden.gardenId}`,
@@ -628,7 +712,7 @@
         const board = await readJSON(`/api/trade/requests?${query}`, run.signal);
         const stocks = [];
         for (const group of channelGroups) {
-          stocks.push(await readJSON(`/api/trade/listings?${new URLSearchParams({ gardenId: group.id })}`, run.signal));
+          stocks.push(await readStock(group, run.signal, forceStock));
         }
         if (run.signal.aborted) return;
         if (!Array.isArray(board.items) || stocks.some((stock, index) => !Array.isArray(stock.items)
@@ -722,7 +806,11 @@
       status.dataset.error = 'true';
       status.textContent = `读取未完成：${error.message || '请稍后重试。'}`
         + (results.querySelector('li') ? ' 下方是部分核验结果，请刷新后查看完整列表。' : '');
-      if (error.status === 401 || error.status === 403 || /格式已变化|不能使用花朵交易/.test(error.message)) clearCheckpoint();
+      if (error.status === 401 || error.status === 403 || /格式已变化|不能使用花朵交易/.test(error.message)) {
+        clearCheckpoint();
+        stockCache.clear();
+        saveStockCache();
+      }
     } finally {
       if (controller === run) {
         if (run.signal.aborted) {
@@ -760,7 +848,9 @@
   });
   panel.querySelector('[data-trade="close"]').addEventListener('click', close);
   refreshButton.addEventListener('click', () => refresh(true));
-  restartButton.addEventListener('click', () => { clearCheckpoint(); refresh(true); });
+  const restart = () => { clearCheckpoint(); refresh(true, true); };
+  restartButton.addEventListener('click', restart);
+  stockRefreshButton.addEventListener('click', restart);
   for (const input of priceInputs) input.addEventListener('change', () => {
     const value = priceInputs.map(field => field.value.trim() === '' ? null : Number(field.value));
     if (!validPriceRange(value)) {
@@ -802,6 +892,7 @@
     scheduleRefresh();
   });
   syncAutoRefreshButton();
+  loadStockCache();
   loadCheckpoint();
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) controller?.abort();
