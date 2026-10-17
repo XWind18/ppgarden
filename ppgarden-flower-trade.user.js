@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         云上花匠 · 花朵交易助手
 // @namespace    https://ppgarden.top/
-// @version      1.1.1
+// @version      1.1.2
 // @description  在花朵交易页用独立悬浮窗，按账号、每组出价从高到低列出可交易花朵、实得时长、库存和可卖组数。
 // @homepageURL  https://github.com/XWind18/ppgarden
 // @supportURL   https://github.com/XWind18/ppgarden/issues
@@ -57,13 +57,18 @@
       border-radius: 10px; background: var(--pt-bg); color: inherit; font: 600 13px/1.4 system-ui, sans-serif; cursor: pointer;
     }
     #ppg-trade-panel [data-trade="close"] { width: 44px; padding: 0; border: 0; font-size: 24px; color: var(--pt-muted); }
-    #ppg-trade-panel [data-trade="auto-refresh"] { align-self: flex-start; margin: 0 16px 8px; color: var(--pt-muted); }
+    #ppg-trade-panel .pt-refresh-settings { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 0 16px 8px; }
+    #ppg-trade-panel [data-trade="auto-refresh"] { color: var(--pt-muted); }
     #ppg-trade-panel [data-trade="auto-refresh"][aria-checked="true"] { color: var(--pt-green); border-color: var(--pt-green); background: var(--pt-inner); }
+    #ppg-trade-panel .pt-refresh-settings label { display: flex; align-items: center; gap: 6px; color: var(--pt-muted); font-size: 12px; }
+    #ppg-trade-panel .pt-refresh-settings input { width: 64px; min-height: 44px; border: 1px solid var(--pt-line); border-radius: 8px; padding: 6px;
+      background: var(--pt-inner); color: var(--pt-ink); font: inherit; text-align: center; }
     #ppg-trade-panel button:disabled { opacity: .55; cursor: wait; }
     :is(#ppg-trade-open, #ppg-trade-panel button, #ppg-trade-panel summary):focus-visible {
       outline: 2px solid var(--pt-green); outline-offset: 2px;
     }
-    #ppg-trade-status { margin: 0; padding: 0 16px 12px; color: var(--pt-muted); font-size: 12px; overflow-wrap: anywhere; }
+    #ppg-trade-status, #ppg-trade-daily-status { margin: 0; padding: 0 16px 12px; color: var(--pt-muted); font-size: 12px; overflow-wrap: anywhere; }
+    #ppg-trade-daily-status { color: var(--pt-green); }
     #ppg-trade-status[data-error="true"] { color: #a35519; }
     :root[data-theme="dark"] #ppg-trade-status[data-error="true"] { color: #f2bd84; }
     #ppg-trade-results { min-height: 60px; overflow: auto; overscroll-behavior: contain; padding: 0 12px 12px; }
@@ -84,6 +89,7 @@
     #ppg-trade-results .pt-price { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
     #ppg-trade-results .pt-price strong { font-size: 19px; line-height: 1.2; color: var(--pt-green); }
     #ppg-trade-results .pt-price span { margin-left: 3px; color: var(--pt-muted); font-size: 10px; }
+    #ppg-trade-results .pt-price .pt-net-label { margin: 0 4px 0 0; font-size: 11px; color: var(--pt-green); }
     #ppg-trade-results .pt-price small { display: block; margin-top: 4px; font-size: 11px; color: var(--pt-muted); }
     #ppg-trade-results .pt-locate { min-width: 0; padding: 0; border: 0; border-radius: 4px; background: transparent; text-align: left; font: inherit; }
     #ppg-trade-results .pt-locate:hover b { text-decoration: underline; text-underline-offset: 3px; }
@@ -113,7 +119,9 @@
   panel.setAttribute('aria-labelledby', 'ppg-trade-title');
   panel.innerHTML = `
     <header><h2 id="ppg-trade-title">可交易花朵</h2><button type="button" data-trade="refresh">刷新列表</button><button type="button" data-trade="close" aria-label="关闭交易悬浮窗">×</button></header>
-    <button type="button" data-trade="auto-refresh" role="switch" aria-label="每10分钟自动刷新" aria-checked="true">自动刷新：开启 · 每10分钟</button>
+    <div class="pt-refresh-settings"><button type="button" data-trade="auto-refresh" role="switch" aria-label="每10分钟自动刷新" aria-checked="false">自动刷新：关闭</button>
+      <label>间隔 <input type="number" data-trade="refresh-minutes" aria-label="自动刷新间隔（分钟，最小3分钟）" min="3" step="1" value="10" inputmode="numeric"> 分钟</label></div>
+    <p id="ppg-trade-daily-status" role="status" aria-live="polite" hidden></p>
     <p id="ppg-trade-status" role="status" aria-live="polite">按账号分组 · 每组出价从高到低</p>
     <div id="ppg-trade-results" aria-busy="false"></div>
     <footer>点花名定位求购；点「卖给他／接单」打开原站确认并预选账号。切换页面保留列表，可手动刷新；成交前由网站重新核验。</footer>
@@ -129,10 +137,33 @@
   const results = panel.querySelector('#ppg-trade-results');
   const refreshButton = panel.querySelector('[data-trade="refresh"]');
   const autoRefreshButton = panel.querySelector('[data-trade="auto-refresh"]');
-  const refreshInterval = 10 * 60 * 1000;
+  const refreshMinutesInput = panel.querySelector('[data-trade="refresh-minutes"]');
+  const dailyStatus = panel.querySelector('#ppg-trade-daily-status');
+  const refreshMinutesKey = 'ppg-trade-refresh-minutes-v1';
+  let refreshMinutes = 10;
+  try {
+    const saved = Number(localStorage.getItem(refreshMinutesKey));
+    if (Number.isSafeInteger(saved) && saved >= 3) refreshMinutes = saved;
+  } catch {}
+  let refreshInterval = refreshMinutes * 60000;
+  refreshMinutesInput.value = String(refreshMinutes);
   const autoRefreshKey = 'ppg-trade-auto-refresh-v1';
-  let autoRefresh = true;
-  try { autoRefresh = localStorage.getItem(autoRefreshKey) !== 'false'; } catch {}
+  const dailyPauseKey = 'ppg-trade-daily-pause-v1';
+  const dayLength = 86400000;
+  const tradeDay = at => Math.floor((at + 8 * 3600000) / dayLength);
+  let pauseDay = tradeDay(Date.now());
+  let dailyPauses = new Map();
+  let allDailyPaused = false;
+  const pauseLabels = { limit: '今日交易次数已达上限，明日恢复', quota: '无剩余上架次数，明日恢复' };
+  let autoRefresh = false;
+  try { autoRefresh = localStorage.getItem(autoRefreshKey) === 'true'; } catch {}
+  try {
+    const saved = JSON.parse(localStorage.getItem(dailyPauseKey));
+    if (saved?.day === pauseDay && Array.isArray(saved.accounts)) {
+      dailyPauses = new Map(saved.accounts.filter(item => Array.isArray(item) && item.length === 2
+        && typeof item[0] === 'string' && item[0] && (item[1] === 'limit' || item[1] === 'quota')));
+    }
+  } catch {}
   let refreshTimer;
   let nextRefreshAt = 0;
   let controller;
@@ -144,16 +175,45 @@
 
   function syncAutoRefreshButton() {
     autoRefreshButton.setAttribute('aria-checked', String(autoRefresh));
-    autoRefreshButton.textContent = autoRefresh ? '自动刷新：开启 · 每10分钟' : '自动刷新：关闭';
+    autoRefreshButton.setAttribute('aria-label', `每${refreshMinutes}分钟自动刷新`);
+    autoRefreshButton.textContent = autoRefresh ? `自动刷新：开启 · 每${refreshMinutes}分钟` : '自动刷新：关闭';
+  }
+
+  function saveDailyPauses() {
+    try { localStorage.setItem(dailyPauseKey, JSON.stringify({ day: pauseDay, accounts: [...dailyPauses] })); }
+    catch { notify('当天停刷已生效，但浏览器无法保存；重新加载后会再次核对次数。'); }
+  }
+
+  function syncDailyStatus(groups) {
+    const count = groups.filter(group => dailyPauses.has(group.id)).length;
+    allDailyPaused = groups.length > 0 && count === groups.length;
+    dailyStatus.hidden = count === 0;
+    dailyStatus.textContent = count ? `${count}/${groups.length} 个账号今日已停刷 · 北京时间次日恢复 · 可手动刷新核对` : '';
+  }
+
+  function resetTradeDay() {
+    const day = tradeDay(Date.now());
+    if (pauseDay === day) return;
+    pauseDay = day;
+    dailyPauses.clear();
+    allDailyPaused = false;
+    dailyStatus.hidden = true;
+    nextRefreshAt = Math.min(nextRefreshAt, Date.now());
+    saveDailyPauses();
   }
 
   function scheduleRefresh() {
     clearTimeout(refreshTimer);
+    resetTradeDay();
     if (panel.hidden || openButton.hidden || document.hidden || controller) return;
+    if (allDailyPaused) {
+      if (autoRefresh) refreshTimer = setTimeout(scheduleRefresh, (pauseDay + 1) * dayLength - 8 * 3600000 - Date.now());
+      return;
+    }
     if (!nextRefreshAt || autoRefresh && nextRefreshAt <= Date.now() && retryAt <= Date.now()) {
       refresh();
     } else if (autoRefresh) {
-      refreshTimer = setTimeout(scheduleRefresh, Math.max(0, nextRefreshAt - Date.now(), retryAt - Date.now()));
+      refreshTimer = setTimeout(scheduleRefresh, Math.min(2147483647, Math.max(0, nextRefreshAt - Date.now(), retryAt - Date.now())));
     }
   }
 
@@ -326,6 +386,36 @@
     return '';
   }
 
+  function checkDailyQuota(stock, meta, day) {
+    const reportedLimit = stock.maxSellerLegsPerDay ?? stock.maxLegsPerDay
+      ?? meta.limits.maxSellerLegsPerDay ?? meta.limits.maxLegsPerDay;
+    const limit = positiveInt(reportedLimit) ? Math.min(20, reportedLimit) : 20;
+    const used = stock.sellerLegsToday !== undefined ? stock.sellerLegsToday : stock.legsToday;
+    const readAt = stock.gameReadAt ?? stock.snapshotAt;
+    const quotaCurrent = readAt == null || Number.isFinite(readAt) && readAt > 0 && tradeDay(readAt) === day;
+    if (nonnegativeInt(used) && used >= limit) return 'limit';
+    if (quotaCurrent && stock.quotaToday === 0) return 'quota';
+    const previous = dailyPauses.get(stock.gardenId);
+    if (previous === 'limit' && nonnegativeInt(used) && used < limit
+      || previous === 'quota' && quotaCurrent && positiveInt(stock.quotaToday)) return '';
+    return previous || '';
+  }
+
+  function setDailyPause(group, reason, day) {
+    // 跨过北京时间零点的旧查询结果不能写成新一天的额度。
+    if (day !== tradeDay(Date.now())) return;
+    if (dailyPauses.get(group.id) !== (reason || undefined)) {
+      if (reason) dailyPauses.set(group.id, reason);
+      else dailyPauses.delete(group.id);
+      saveDailyPauses();
+    }
+    if (reason) {
+      group.reason = pauseLabels[reason];
+      group.rows.clear();
+      group.done = true;
+    }
+  }
+
   function render(groups) {
     const expanded = new Map([...results.querySelectorAll('details')].map(node => [node.dataset.account, node.open]));
     const active = results.contains(document.activeElement) ? document.activeElement : null;
@@ -345,7 +435,8 @@
       summary.append(textElement('strong', group.name), textElement('small', group.reason || `${rows.length} 种花`));
       details.append(summary);
       if (!rows.length) {
-        details.append(textElement('p', group.reason ? `${group.reason}，请在原页面处理后刷新列表。`
+        details.append(textElement('p', group.reason ? dailyPauses.has(group.id)
+          ? '已停止本账号当天的自动查询；仍可点「刷新列表」重新核对。' : `${group.reason}，请在原页面处理后刷新列表。`
           : group.done ? '暂时没有符合库存、额度及买家条件的求购。' : '尚未完成核对，请刷新列表。'));
       } else {
         const list = document.createElement('ul');
@@ -362,8 +453,8 @@
           name.append(textElement('b', row.name), textElement('span', qualityNames[row.quality], 'pt-quality'));
           copy.append(name, textElement('small', `库存 ${row.count.toLocaleString('zh-CN')} 朵 · 可卖 ${row.groups} 组`, 'pt-stock'));
           const price = textElement('div', '', 'pt-price');
-          price.append(textElement('strong', row.price), textElement('span', '分钟/组'),
-            textElement('small', `实得 ${row.gets} 分钟/组`));
+          price.append(textElement('span', '实得', 'pt-net-label'), textElement('strong', row.gets), textElement('span', '分钟/组'),
+            textElement('small', `出价 ${row.price} 分钟/组`));
           const action = textElement('button', row.autoMatch ? '卖给他' : '接单', 'pt-action');
           action.type = 'button';
           action.title = `用 ${group.name} 打开原站确认 · 求购 #${row.requestId}`;
@@ -383,13 +474,15 @@
     results.scrollTop = scrollTop;
   }
 
-  async function refresh() {
+  async function refresh(manual = false) {
     if (controller) return;
     if (retryAt > Date.now()) {
       notify(`查询过于频繁，请等待 ${Math.ceil((retryAt - Date.now()) / 1000)} 秒再刷新；当前结果已保留。`);
       return;
     }
     clearTimeout(refreshTimer);
+    resetTradeDay();
+    const day = pauseDay;
     const run = new AbortController();
     controller = run;
     const groups = [];
@@ -414,12 +507,14 @@
       for (const garden of meta.gardens) {
         if (typeof garden.gardenId !== 'string' || !garden.gardenId || !meta.channels.includes(garden.channel)) continue;
         groups.push({ id: garden.gardenId, name: garden.nickname || garden.name || `账号 ${garden.gardenId}`,
-          channel: garden.channel, reason: accountReason(meta, garden), rows: new Map(), done: false });
+          channel: garden.channel, reason: accountReason(meta, garden)
+            || (!manual && pauseLabels[dailyPauses.get(garden.gardenId)]) || '', rows: new Map(), done: false });
       }
       groups.sort((a, b) => {
         const index = id => accountOrder.includes(id) ? accountOrder.indexOf(id) : accountOrder.length;
         return index(a.id) - index(b.id);
       });
+      syncDailyStatus(groups);
       render(groups);
       for (const channel of new Set(groups.filter(group => !group.reason).map(group => group.channel))) {
         const channelGroups = groups.filter(group => group.channel === channel && !group.reason);
@@ -434,8 +529,11 @@
           throw new Error('库存或求购数据格式已变化，请更新脚本。');
         }
         truncated ||= board.openTruncated === true;
+        stocks.forEach((stock, index) => setDailyPause(channelGroups[index], checkDailyQuota(stock, meta, day), day));
+        syncDailyStatus(groups);
+        render(groups);
         // 自动出售的开关和可售组数不适用于手动接求购；先按仓库数量筛选，再以 sell-quote 核验。
-        const byGarden = new Map(channelGroups.map((group, index) => [group.id, new Set(stocks[index].items.filter(item => positiveInt(item.flowerId)
+        const byGarden = new Map(channelGroups.map((group, index) => [group.id, new Set(stocks[index].items.filter(item => !group.reason && positiveInt(item.flowerId)
           && qualityNames[item.quality] && nonnegativeInt(item.count) && item.count >= meta.limits.groupSize).map(flowerKey))]));
         const stocked = new Set([...byGarden.values()].flatMap(keys => [...keys]));
         const seen = new Set();
@@ -451,7 +549,7 @@
         for (let index = 0; index < candidates.length; index++) {
           const item = candidates[index];
           const key = flowerKey(item);
-          if (channelGroups.filter(group => byGarden.get(group.id).has(key))
+          if (channelGroups.filter(group => !group.reason && byGarden.get(group.id).has(key))
             .every(group => (group.rows.get(key)?.price ?? 0) > item.pricePerGroup)) { lowerSkipped++; continue; }
           status.textContent = `正在核对 ${channelGroups.length} 个账号 · 求购 ${index + 1}/${candidates.length}…`;
           let quote;
@@ -471,7 +569,14 @@
           if (quote.paused || quote.remainingGroups === 0) continue;
           for (const seller of quote.sellers) {
             const group = channelGroups.find(group => group.id === seller.gardenId);
-            if (!group || seller.snapshotMissing !== false || seller.blockCode || seller.blockText
+            if (!group || group.reason) continue;
+            const exhaustedText = typeof seller.blockText === 'string'
+              && /^(?:(?:今日|今天)?(?:无|没有)(?:剩余)?上架次数|(?:今日|今天)?(?:剩余)?上架次数(?:已)?用[尽完])(?:[，。！!]|$)/.test(seller.blockText.trim());
+            if (seller.blockCode === 'daily_leg_limit' || exhaustedText) {
+              setDailyPause(group, seller.blockCode === 'daily_leg_limit' ? 'limit' : 'quota', day);
+              continue;
+            }
+            if (seller.snapshotMissing !== false || seller.blockCode || seller.blockText
               || !positiveInt(seller.groups) || !positiveInt(seller.sellableGroups) || !nonnegativeInt(seller.haveCount)) continue;
             const available = Math.min(seller.groups, seller.sellableGroups, quote.remainingGroups ?? Infinity,
               Math.floor(seller.haveCount / meta.limits.groupSize));
@@ -483,6 +588,7 @@
               price: quote.pricePerGroup, gets: quote.sellerGetsPerGroup, groups: available,
               count: seller.haveCount, expiresAt: item.expiresAt, autoMatch: item.autoMatch === true });
           }
+          syncDailyStatus(groups);
           render(groups);
         }
         channelGroups.forEach(group => { group.done = true; });
@@ -536,11 +642,26 @@
     scheduleRefresh();
   });
   panel.querySelector('[data-trade="close"]').addEventListener('click', close);
-  refreshButton.addEventListener('click', refresh);
+  refreshButton.addEventListener('click', () => refresh(true));
   autoRefreshButton.addEventListener('click', () => {
     autoRefresh = !autoRefresh;
     try { localStorage.setItem(autoRefreshKey, String(autoRefresh)); }
     catch { notify('开关已生效，但当前浏览器无法保存，下次打开可能需要重新设置。'); }
+    syncAutoRefreshButton();
+    scheduleRefresh();
+  });
+  refreshMinutesInput.addEventListener('change', () => {
+    const minutes = Number(refreshMinutesInput.value);
+    if (!Number.isSafeInteger(minutes) || minutes < 3) {
+      refreshMinutesInput.value = String(refreshMinutes);
+      notify('刷新间隔请输入不小于3的整数分钟。');
+      return;
+    }
+    refreshMinutes = minutes;
+    refreshInterval = minutes * 60000;
+    if (nextRefreshAt) nextRefreshAt = Date.now() + refreshInterval;
+    try { localStorage.setItem(refreshMinutesKey, String(minutes)); }
+    catch { notify('刷新间隔已生效，但当前浏览器无法保存。'); }
     syncAutoRefreshButton();
     scheduleRefresh();
   });
