@@ -9,6 +9,7 @@
   const autoRefresh = panel.querySelector('[data-trade="auto-refresh"]');
   const refreshMinutes = panel.querySelector('[data-trade="refresh-minutes"]');
   const dailyStatus = panel.querySelector('#ppg-trade-daily-status');
+  const resumePoint = () => JSON.parse(localStorage.getItem('ppg-trade-checkpoint-v1'));
   const dailyPauses = () => JSON.parse(localStorage.getItem('ppg-trade-daily-pause-v1'))?.accounts || [];
   const nativeSetTimeout = window.setTimeout.bind(window);
   const nativeClearTimeout = window.clearTimeout.bind(window);
@@ -52,7 +53,8 @@
     if (expire) fixture.advance(61000);
     fixture.scenario = scenario;
     fixture.calls.length = 0;
-    panel.querySelector('[data-trade="refresh"]').click();
+    const restart = panel.querySelector('[data-trade="restart"]');
+    (restart.hidden ? panel.querySelector('[data-trade="refresh"]') : restart).click();
     await wait();
   };
   const group = id => results.querySelector(`[data-account="${id}"]`);
@@ -113,7 +115,7 @@
     const bottom = launcher.getBoundingClientRect();
     const nav = document.querySelector('.bottom-tabs').getBoundingClientRect();
     assert(bottom.bottom <= nav.top - 11, '悬浮入口避开底部导航并留出12px间距');
-    assert(launcher.getBoundingClientRect().height >= 44 && [...panel.querySelectorAll('button')].every(b => b.getBoundingClientRect().height >= 44), '所有操作按钮触控高度至少44px');
+    assert(launcher.getBoundingClientRect().height >= 44 && [...panel.querySelectorAll('button:not([hidden])')].every(b => b.getBoundingClientRect().height >= 44), '所有可见操作按钮触控高度至少44px');
     assert(panel.getBoundingClientRect().left >= 0 && panel.getBoundingClientRect().right <= innerWidth
       && document.documentElement.scrollWidth <= innerWidth, '悬浮窗完整落在视口内，页面无横向溢出');
     const lightBackground = getComputedStyle(panel).backgroundColor;
@@ -201,6 +203,21 @@
     panel.querySelector('[data-trade="refresh"]').click();
     await tick();
     assert(fixture.calls.length === callsBeforeCooldown && document.querySelector('#ppg-trade-notice').textContent.includes('等待'), '遵守Retry-After冷却时间，重复刷新不再请求接口');
+    const savedLimited = resumePoint();
+    assert(savedLimited?.responses.some(([path]) => path.endsWith('/1/sell-quote'))
+      && savedLimited.retryAt > Date.now() && savedLimited.nextRequestAt > 0
+      && panel.querySelector('[data-trade="refresh"]').textContent === '继续读取', '429保留已完成步骤、冷却和请求间隔，提供继续读取入口');
+    fixture.advance(61000);
+    fixture.scenario = 'normal';
+    fixture.calls.length = 0;
+    panel.querySelector('[data-trade="refresh"]').click();
+    await wait();
+    assert(fixture.calls.filter(c => c.path.includes('sell-quote')).map(c => c.path.match(/requests\/(\d+)/)[1]).join(',') === '3,4,5,21'
+      && !fixture.calls.some(c => c.path.includes('gardenId=account-a') || c.path.includes('gardenId=account-b') || c.path.includes('gardenId=account-c')), '429冷却结束后从失败求购继续，不重复读取已完成库存及报价');
+    assert(fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1 && !resumePoint()
+      && panel.querySelector('[data-trade="restart"]').hidden && results.querySelectorAll('li').length === 7, '续拉重新核对账号权限，完成后清除断点并恢复完整列表');
+    assert(status.textContent.includes(`${new Date(savedLimited.startedAt).toLocaleTimeString('zh-CN', { hour12: false })} 开始`),
+      '续拉完成后仍显示本轮最初开始时间，避免把缓存数据标为刚刚读取');
     await refresh('denied');
     assert(status.textContent.includes('权限') && !results.querySelector('li'), '登录失效提示，不保留上次可交易清单');
     await refresh('malformed');
@@ -219,11 +236,13 @@
     await tick();
     assert(fixture.calls.length === 0 && panel.hidden, '等待请求间隔时关闭窗口，取消等待且不发出后续请求');
     launcher.click();
-    await tick();
-    assert(fixture.calls.length === 0 && results.querySelector('li'), '取消等待后重新打开不混入旧轮请求，保留现有结果');
+    await wait();
+    assert(fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1 && results.querySelectorAll('li').length === 7,
+      '重新打开从断点继续，不混入已取消的旧轮请求');
     fixture.delay = 200;
+    fixture.calls.length = 0;
     panel.querySelector('[data-trade="refresh"]').click();
-    await until(() => fixture.calls.length > 0);
+    await until(() => fixture.calls.some(c => c.path.endsWith('/2/sell-quote')));
     panel.querySelector('[data-trade="close"]').click();
     await tick();
     assert(panel.hidden && fixture.aborted > 0 && document.activeElement === launcher, '关闭时取消请求并恢复入口焦点');
@@ -231,8 +250,10 @@
     fixture.calls.length = 0;
     launcher.click();
     await wait();
-    assert(results.querySelector('li') && !panel.hidden && fixture.calls.length === 0
-      && status.textContent.includes('查询已暂停'), '查询取消后重新打开保留已有列表，明确提示中断且不重复查询');
+    assert(results.querySelectorAll('li').length === 7 && !panel.hidden
+      && fixture.calls.some(c => c.path.endsWith('/2/sell-quote')) && !fixture.calls.some(c => c.path.endsWith('/1/sell-quote') || c.path.includes('gardenId=account-a')),
+      '请求中断后重新打开只重试未完成求购，不重复已经完成的库存和报价');
+    fixture.calls.length = 0;
     panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     assert(panel.hidden && launcher.getAttribute('aria-expanded') === 'false', 'Esc收起悬浮窗并同步入口状态');
     const page = document.querySelector('.trd-page');
@@ -389,6 +410,69 @@
     flushTimers();
     await wait();
     assert(fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1, '达到自定义3分钟间隔时仅刷新一轮');
+    autoRefresh.click();
+    const minPrice = panel.querySelector('[data-trade="min-price"]');
+    const maxPrice = panel.querySelector('[data-trade="max-price"]');
+    const setPriceRange = (min, max) => {
+      minPrice.value = min ?? '';
+      maxPrice.value = max ?? '';
+      minPrice.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    assert(minPrice.value === '' && maxPrice.value === '', '读取保存的不限价格范围，单位明确为求购出价分钟/组');
+    setPriceRange(0, 80);
+    assert(minPrice.value === '' && maxPrice.value === '', '拒绝零或负数出价');
+    setPriceRange(80, 60);
+    assert(minPrice.value === '' && maxPrice.value === '', '拒绝最低价高于最高价');
+    setPriceRange(60.5, 80);
+    assert(minPrice.value === '' && maxPrice.value === '', '拒绝非整数出价');
+    setPriceRange(60, 80);
+    assert(localStorage.getItem('ppg-trade-price-range-v1') === '[60,80]' && !results.querySelector('li')
+      && autoRefresh.getAttribute('aria-checked') === 'false', '价格范围自动保存，清除旧范围结果，不擅自开启自动刷新');
+    await refresh('normal');
+    const quoteIds = () => fixture.calls.filter(c => c.path.includes('sell-quote')).map(c => Number(c.path.match(/requests\/(\d+)/)[1])).join(',');
+    assert(quoteIds() === '2,3' && status.textContent.includes('出价 60～80'), '在逐单请求前按出价范围过滤，包含上下边界，仅读取60至80报价');
+    setPriceRange(100, null);
+    await refresh('normal');
+    assert(quoteIds() === '1', '只设最低价时排除所有较低报价');
+    fixture.calls.length = 0;
+    panel.querySelector('[data-trade="refresh"]').click();
+    setPriceRange(null, 25);
+    await wait();
+    assert(fixture.calls.length === 0 && !resumePoint()?.responses && !results.querySelector('li'), '读取等待中修改价格范围会取消旧请求和旧断点，不混入旧范围结果');
+    await refresh('normal');
+    assert(quoteIds() === '4,5,21', '只设最高价时兼容多渠道，范围外不发报价请求');
+    setPriceRange(null, null);
+    await refresh('limited');
+    fixture.advance(61000);
+    fixture.scenario = 'normal';
+    fixture.calls.length = 0;
+    panel.querySelector('[data-trade="restart"]').click();
+    await wait();
+    assert(fixture.calls.filter(c => c.path.includes('/listings?')).length === 4 && quoteIds() === '1,2,3,4,5,21', '用户可主动重新查询，放弃断点并重新核对全部库存与报价');
+    await refresh('limited');
+    setPriceRange(60, 80);
+    assert(!resumePoint()?.responses && panel.querySelector('[data-trade="restart"]').hidden, '修改价格范围会取消旧断点，保留服务器要求的冷却');
+    await refresh('normal');
+    assert(quoteIds() === '2,3', '修改范围后只读取新范围，不混用旧断点');
+    setPriceRange(null, null);
+    await refresh('limited');
+    fixture.advance(61000);
+    fixture.meta.limits.groupSize = 30;
+    fixture.scenario = 'normal';
+    fixture.calls.length = 0;
+    panel.querySelector('[data-trade="refresh"]').click();
+    await wait();
+    assert(fixture.calls.filter(c => c.path.includes('/listings?')).length === 4 && quoteIds().includes('1')
+      && document.querySelector('#ppg-trade-notice').textContent.includes('交易规则已变化'), '续拉检测到账号或交易规则变化时，丢弃旧步骤并完整重新核对');
+    fixture.meta.limits.groupSize = 25;
+    await refresh('limited');
+    fixture.advance(31 * 60000);
+    fixture.scenario = 'normal';
+    fixture.calls.length = 0;
+    panel.querySelector('[data-trade="refresh"]').click();
+    await wait();
+    assert(fixture.calls.filter(c => c.path.includes('/listings?')).length === 4 && quoteIds() === '1,2,3,4,5,21'
+      && !resumePoint(), '断点超过30分钟后自动重新读取，不沿用过期库存或报价');
     output.textContent = `PASS ${passed.length}\n${passed.join('\n')}`;
   } catch (error) {
     output.textContent = `FAIL after ${passed.length}: ${error.message}`;
