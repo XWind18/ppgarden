@@ -41,7 +41,9 @@
     assert(row('account-a', '3:1').textContent.includes('可卖 2 组'), '可卖组数受服务器可售组数限制');
     assert(row('account-b', '1:5').textContent.includes('实得 100 分钟/组'), '实得读取服务器金额，保留向下取整结果');
     assert(!row('account-b', '2:4'), '仓库快照缺失的花不当作有货');
-    assert(group('account-c').textContent.includes('出售已暂停') && !group('account-c').querySelector('li'), '暂停出售账号明确显示原因，不列可交易花');
+    assert(row('account-c', '1:5')?.dataset.request === '1', '出售模块暂停时，仍展示手动报价接口明确允许的有货花朵');
+    assert(fixture.calls.filter(c => c.path.includes('/listings?')).length === 4
+      && !fixture.calls.some(c => c.path.includes('sellable-stock')), '按账号读取原始库存，不用受自动出售开关影响的库存接口');
     assert(group('account-d').querySelectorAll('li').length === 1 && !row('account-a', '3:1').textContent.includes('25分钟'), '按渠道分别读取，不混入其他渠道报价');
     assert(results.textContent.includes('<img src=x') && !results.querySelector('img'), '账号与花名用纯文本渲染，不能注入 HTML');
     const ids = fixture.calls.filter(c => c.path.includes('sell-quote')).map(c => Number(c.path.match(/requests\/(\d+)/)[1]));
@@ -62,11 +64,18 @@
     assert(!results.querySelector('li') && status.textContent.includes('0 项可交易'), '无库存时显示空结果');
     assert(!fixture.calls.some(c => c.path.includes('sell-quote')), '无可卖库存时不逐张请求核验');
     await refresh('paused');
-    assert(results.querySelectorAll('details').length === 4 && fixture.calls.length === 1, '全部暂停时保留账号状态，只读取一次元数据');
+    assert(results.querySelectorAll('li').length === 7, '全部账号自动出售暂停、库存未启用出售时，仍按手动报价显示可卖花朵');
+    await refresh('user-paused');
+    assert(!results.querySelector('li') && fixture.calls.length === 1 && results.textContent.includes('全部账号交易已暂停'), '用户级交易暂停仍阻止手动交易');
+    await refresh('garden-paused');
+    assert(!group('account-b').querySelector('li') && row('account-c', '1:5')
+      && !fixture.calls.some(c => c.path.includes('gardenId=account-b')), '本号交易暂停只排除对应账号，其他账号继续核验');
     await refresh('team');
     assert(results.textContent.includes('团单时段') && !results.querySelector('li'), '团单暂停时段不列立即可交易花');
     await refresh('quote-paused');
     assert(row('account-b', '1:5').dataset.request === '2', '服务器核验暂停后使用下一张有效报价');
+    await refresh('seller-blocked');
+    assert(!group('account-c').querySelector('li') && row('account-b', '1:5'), '自动出售暂停账号若被手动报价接口阻止，仍不列为可交易');
     await refresh('quote-empty');
     assert(!row('account-a', '1:5'), '核验时买家需求归零后不列该报价');
     await refresh('gone');
@@ -80,6 +89,8 @@
     assert(status.textContent.includes('权限') && !results.querySelector('li'), '登录失效提示，不保留上次可交易清单');
     await refresh('malformed');
     assert(status.textContent.includes('格式已变化'), '响应字段变化时明确报错');
+    await refresh('invalid-stock');
+    assert(status.textContent.includes('库存或求购数据格式已变化') && !results.querySelector('li'), '库存账号与请求不匹配时停止使用数据');
     await refresh('invalid-quote');
     assert(status.textContent.includes('核验数据格式已变化') && !results.querySelector('li'), '报价请求ID不匹配时停止使用数据');
     fixture.scenario = 'normal';
