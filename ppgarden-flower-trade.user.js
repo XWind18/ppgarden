@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         云上花匠 · 花朵交易助手
 // @namespace    https://ppgarden.top/
-// @version      1.0.0
+// @version      1.0.1
 // @description  在花朵交易页用独立悬浮窗，按账号、每组出价从高到低列出可交易花朵、实得时长、库存和可卖组数。
 // @homepageURL  https://github.com/XWind18/ppgarden
 // @supportURL   https://github.com/XWind18/ppgarden/issues
@@ -161,10 +161,6 @@
     if (meta.teamWindow?.active) return '团单时段，交易暂停';
     if (meta.controlsUnavailable || garden.pause?.controlsUnavailable) return '交易状态暂时无法读取';
     if (garden.pause?.gardenControl?.paused) return '本号交易已暂停';
-    if (!garden.pause?.sell || typeof garden.pause.sell.paused !== 'boolean') return '出售状态未读取';
-    if (garden.pause.sell.effectivePaused || garden.pause.sell.paused) {
-      return garden.pause.sell.by === 'hosting_off' ? '托管关闭，出售已暂停' : '出售已暂停';
-    }
     return '';
   }
 
@@ -241,14 +237,19 @@
       for (const channel of new Set(groups.filter(group => !group.reason).map(group => group.channel))) {
         const channelGroups = groups.filter(group => group.channel === channel && !group.reason);
         const query = new URLSearchParams({ channel });
-        const [board, stock] = await Promise.all([
-          readJSON(`/api/trade/requests?${query}`, run.signal), readJSON(`/api/trade/sellable-stock?${query}`, run.signal),
+        const [board, ...stocks] = await Promise.all([
+          readJSON(`/api/trade/requests?${query}`, run.signal),
+          ...channelGroups.map(group => readJSON(`/api/trade/listings?${new URLSearchParams({ gardenId: group.id })}`, run.signal)),
         ]);
         if (run.signal.aborted) return;
-        if (!Array.isArray(board.items) || !Array.isArray(stock.items)) throw new Error('库存或求购数据格式已变化，请更新脚本。');
+        if (!Array.isArray(board.items) || stocks.some((stock, index) => !Array.isArray(stock.items)
+          || stock.gardenId !== channelGroups[index].id || stock.channel !== channel)) {
+          throw new Error('库存或求购数据格式已变化，请更新脚本。');
+        }
         truncated ||= board.openTruncated === true;
-        const sellable = new Set(stock.items.filter(item => positiveInt(item.flowerId) && qualityNames[item.quality]
-          && positiveInt(item.sellableGroups)).map(flowerKey));
+        // 自动出售的开关和可售组数不适用于手动接求购；先按仓库数量筛选，再以 sell-quote 核验。
+        const stocked = new Set(stocks.flatMap(stock => stock.items).filter(item => positiveInt(item.flowerId)
+          && qualityNames[item.quality] && nonnegativeInt(item.count) && item.count >= meta.limits.groupSize).map(flowerKey));
         const seen = new Set();
         const candidates = board.items.filter(item => {
           if (!positiveInt(item.id) || seen.has(item.id)) return false;
@@ -257,7 +258,7 @@
             && item.status === 'open' && Number.isFinite(item.expiresAt) && item.expiresAt > Date.now()
             && positiveInt(item.pricePerGroup) && positiveInt(item.groups) && !item.pausedReason
             && !item.buyerPlaying && !item.buyerQueueFull && !item.progress?.satisfied && !item.progress?.reached
-            && sellable.has(flowerKey(item)) && flowers.has(flowerKey(item));
+            && stocked.has(flowerKey(item)) && flowers.has(flowerKey(item));
         }).sort((a, b) => b.pricePerGroup - a.pricePerGroup || a.expiresAt - b.expiresAt);
         for (let index = 0; index < candidates.length; index++) {
           const item = candidates[index];
