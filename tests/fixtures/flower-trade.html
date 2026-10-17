@@ -48,10 +48,15 @@
 <div class="garden-account-overlay" data-open="false"><button id="fixture-menu-close">关闭账号菜单</button></div>
 <script>
   const options = new URLSearchParams(location.search);
-  if (options.has('test')) localStorage.removeItem('ppg-trade-auto-refresh-v1');
+  if (options.has('test')) {
+    localStorage.removeItem('ppg-trade-auto-refresh-v1');
+    localStorage.removeItem('ppg-trade-daily-pause-v1');
+    localStorage.removeItem('ppg-trade-refresh-minutes-v1');
+  }
   if (options.has('dark')) document.documentElement.dataset.theme = 'dark';
   const realNow = Date.now;
-  let clockOffset = 0;
+  let clockOffset = options.has('clock') ? Number(options.get('clock')) - realNow()
+    : options.has('test') ? Date.parse('2026-10-17T02:00:00+00:00') - realNow() : 0;
   Date.now = () => realNow() + clockOffset;
   const future = Date.now() + 86400000;
   const garden = (gardenId, nickname, channel = 'alipay', paused = false) => ({ gardenId, nickname, channel,
@@ -63,7 +68,7 @@
   const quote = (requestId, pricePerGroup, sellers, extra = {}) => ({ requestId, pricePerGroup,
     sellerGetsPerGroup: Math.floor(pricePerGroup * .7), remainingGroups: 9, paused: false, sellers, ...extra });
   const fixture = window.tradeFixture = {
-    calls: [], scenario: 'normal', delay: 0, aborted: 0, opened: [], submitted: 0, selected: [], activeAccount: 'account-a', hideTarget: false,
+    calls: [], scenario: options.has('exhausted') ? 'mixed-exhausted' : 'normal', delay: 0, aborted: 0, opened: [], submitted: 0, selected: [], activeAccount: 'account-a', hideTarget: false,
     advance: ms => { clockOffset += ms; },
     meta: { allowed: true, enabled: true, channels: ['alipay', 'wechat'], userControl: { paused: false }, limits: { groupSize: 25 },
       gardens: [garden('account-b', '测试小号'), garden('account-c', '自动出售暂停账号', 'alipay', true), garden('account-a', '测试主号'), garden('account-d', '微信账号', 'wechat')],
@@ -111,7 +116,21 @@
     } else if (url.pathname === '/api/trade/listings') {
       const id = url.searchParams.get('gardenId');
       data = { gardenId: id, channel: fixture.meta.gardens.find(g => g.gardenId === id)?.channel,
+        sellerLegsToday: 2, maxSellerLegsPerDay: 20, quotaToday: 5, quotaRemaining: 5, quotaCommittedGroups: 0, gameReadAt: Date.now(),
         items: fixture.scenario === 'empty' ? [] : structuredClone(fixture.stock.items) };
+      if (fixture.scenario === 'limit-partial' && id === 'account-a') data.sellerLegsToday = 20;
+      if (fixture.scenario === 'quota-partial' && id === 'account-a') data.quotaToday = data.quotaRemaining = 0;
+      if (fixture.scenario === 'mixed-exhausted') {
+        if (['account-a', 'account-c'].includes(id)) data.sellerLegsToday = 20;
+        else data.quotaToday = data.quotaRemaining = 0;
+      }
+      if (fixture.scenario === 'quota-unknown') {
+        data.quotaToday = null; data.quotaRemaining = 0; data.sellerLegsToday = '20';
+      }
+      if (fixture.scenario === 'quota-committed') {
+        data.quotaRemaining = 0; data.quotaCommittedGroups = 5; data.shelfFree = 0;
+      }
+      if (fixture.scenario === 'quota-old') { data.quotaToday = 0; data.gameReadAt -= 86400000; }
       if (fixture.scenario === 'invalid-stock') data.gardenId = 'wrong-account';
     } else if (url.pathname === '/api/trade/sellable-stock') {
       data = { items: [] };
@@ -125,6 +144,14 @@
       if (fixture.scenario === 'seller-blocked' && id === 1) data.sellers.find(s => s.gardenId === 'account-c').blockCode = 'seller_paused';
       if (fixture.scenario === 'quote-empty' && id === 2) data.remainingGroups = 0;
       if (fixture.scenario === 'invalid-quote' && id === 1) data.requestId = 900;
+      if (['quota-text', 'quota-not-confirmed', 'quota-short'].includes(fixture.scenario)) {
+        for (const seller of data.sellers) {
+          seller.groups = seller.sellableGroups = 0;
+          seller.blockCode = fixture.scenario === 'quota-short' ? 'quota_short' : 'not_ready';
+          seller.blockText = fixture.scenario === 'quota-text' ? '无上架次数'
+            : fixture.scenario === 'quota-short' ? '卖家今天剩余上架次数不够这么多组' : '暂无上架次数数据，待刷新';
+        }
+      }
     }
     return Response.json(data);
   };
@@ -196,11 +223,11 @@
   }
   renderSite();
 </script>
-<script src="../../ppgarden-flower-trade.user.js?v=1.1.1"></script>
+<script src="../../ppgarden-flower-trade.user.js?v=1.1.2"></script>
 <script>
   if (options.has('test')) {
     const check = document.createElement('script');
-    check.src = '../ppgarden-flower-trade.self-check.js?v=1.1.1';
+    check.src = '../ppgarden-flower-trade.self-check.js?v=1.1.2';
     document.body.append(check);
   }
 </script>
