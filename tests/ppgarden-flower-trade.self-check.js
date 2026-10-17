@@ -9,6 +9,8 @@
   const autoRefresh = panel.querySelector('[data-trade="auto-refresh"]');
   const refreshMinutes = panel.querySelector('[data-trade="refresh-minutes"]');
   const dailyStatus = panel.querySelector('#ppg-trade-daily-status');
+  const stockRefresh = panel.querySelector('[data-trade="stock-refresh"]');
+  const inventory = () => new Map(JSON.parse(localStorage.getItem('ppg-trade-stock-cache-v1')) || []);
   const resumePoint = () => JSON.parse(localStorage.getItem('ppg-trade-checkpoint-v1'));
   const dailyPauses = () => JSON.parse(localStorage.getItem('ppg-trade-daily-pause-v1'))?.accounts || [];
   const nativeSetTimeout = window.setTimeout.bind(window);
@@ -53,8 +55,7 @@
     if (expire) fixture.advance(61000);
     fixture.scenario = scenario;
     fixture.calls.length = 0;
-    const restart = panel.querySelector('[data-trade="restart"]');
-    (restart.hidden ? panel.querySelector('[data-trade="refresh"]') : restart).click();
+    stockRefresh.click();
     await wait();
   };
   const group = id => results.querySelector(`[data-account="${id}"]`);
@@ -143,7 +144,7 @@
     const previousRequest = fixture.calls.at(-1);
     await refresh('normal', false);
     assert(fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1
-      && fixture.calls.some(c => c.path.includes('/listings?')) && fixture.calls.some(c => c.path.includes('sell-quote')), '手动刷新重新读取账号、库存及报价，不复用旧接口数据');
+      && fixture.calls.some(c => c.path.includes('/listings?')) && fixture.calls.some(c => c.path.includes('sell-quote')), '更新仓库重新读取账号、库存及报价，不复用旧接口数据');
     assert(fixture.calls[0].clockAt - previousRequest.finishedAt >= 2000
       && fixture.calls.slice(1).every((call, i) => call.clockAt - fixture.calls[i].finishedAt >= 2000), '立即手动刷新仍遵守跨轮与轮内统一请求间隔');
     autoRefresh.click();
@@ -175,7 +176,7 @@
     assert(fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1, '回到前台时只补一次已到期刷新');
     await refresh('empty');
     assert(!results.querySelector('li') && status.textContent.includes('0 项可交易'), '无库存时显示空结果');
-    assert(fixture.calls.some(c => c.path.includes('/listings?')), '手动刷新重新读取仓库，不继续使用旧数据');
+    assert(fixture.calls.some(c => c.path.includes('/listings?')), '更新仓库重新读取库存，不继续使用旧数据');
     assert(!fixture.calls.some(c => c.path.includes('sell-quote')), '无可卖库存时不逐张请求核验');
     await refresh('paused');
     assert(results.querySelectorAll('li').length === 7, '全部账号自动出售暂停、库存未启用出售时，仍按手动报价显示可卖花朵');
@@ -327,7 +328,8 @@
     flushTimers();
     await wait();
     assert(!fixture.calls.some(c => c.path.includes('gardenId=account-a'))
-      && fixture.calls.some(c => c.path.includes('gardenId=account-b')) && !group('account-a').querySelector('li'), '后续自动刷新跳过已耗尽账号，其他账号继续读取库存和报价');
+      && fixture.calls.some(c => c.path.includes('sell-quote')) && group('account-b').querySelector('li')
+      && !group('account-a').querySelector('li'), '后续自动刷新跳过已耗尽账号，其他账号复用库存并继续核验报价');
     await refresh('normal', false);
     assert(fixture.calls.some(c => c.path.includes('gardenId=account-a')) && row('account-a', '1:5')
       && dailyStatus.hidden && dailyPauses().length === 0, '手动刷新可重新核验停刷账号，明确恢复额度后解除当天暂停');
@@ -473,6 +475,89 @@
     await wait();
     assert(fixture.calls.filter(c => c.path.includes('/listings?')).length === 4 && quoteIds() === '1,2,3,4,5,21'
       && !resumePoint(), '断点超过30分钟后自动重新读取，不沿用过期库存或报价');
+    assert(inventory().size === 4 && [...inventory()].every(([id, entry]) => entry.stock.gardenId === id
+      && Number.isFinite(entry.readAt) && entry.stock.items.length > 0), '按账号持久保存完整库存及原始读取时间，包含独立渠道');
+    const readTimes = [...inventory()].map(([id, entry]) => [id, entry.readAt]);
+    const refreshCached = async () => {
+      fixture.calls.length = 0;
+      panel.querySelector('[data-trade="refresh"]').click();
+      await wait();
+    };
+    fixture.advance(60000);
+    await refreshCached();
+    assert(!fixture.calls.some(c => c.path.includes('/listings?'))
+      && fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1 && quoteIds() === '1,2,3,4,5,21',
+      '30分钟内刷新列表复用所有账号仓库，但重新检查账号、求购及逐单报价');
+    assert(JSON.stringify([...inventory()].map(([id, entry]) => [id, entry.readAt])) === JSON.stringify(readTimes)
+      && [...results.querySelectorAll('.pt-cache')].every(node => node.textContent.includes('仓库缓存') && node.textContent.includes('原站同步')),
+      '复用缓存不重置读取时间，按账号分别显示读取时间和原站同步时间');
+    const previousCount = fixture.quotes[2].sellers[0].haveCount;
+    fixture.quotes[2].sellers[0].haveCount = 30;
+    await refreshCached();
+    assert(row('account-a', '1:5').textContent.includes('库存 30 朵') && row('account-a', '1:5').textContent.includes('可卖 1 组'),
+      '缓存库存仅筛选候选，展示数量和可卖组数始终使用本轮报价核验');
+    fixture.quotes[2].sellers[0].haveCount = previousCount;
+    fixture.advance(31 * 60000);
+    await refreshCached();
+    assert(fixture.calls.filter(c => c.path.includes('/listings?')).length === 4
+      && [...inventory()].every(([id, entry]) => entry.readAt > new Map(readTimes).get(id)), '缓存过期后分别重新读取各账号，不回退使用过期库存');
+    await refresh('stock-old-sync');
+    const oldSync = inventory().get('account-a').stock.gameReadAt;
+    assert(group('account-a').querySelector('.pt-cache').dataset.stale === 'true'
+      && group('account-a').querySelector('.pt-cache').textContent.includes(new Date(oldSync).toLocaleString('zh-CN', { hour12: false })),
+      '两天前的游戏同步时间原样保留，明确提示数据较早，不冒充刚同步');
+    await refreshCached();
+    assert(!fixture.calls.some(c => c.path.includes('/listings?')) && inventory().get('account-a').stock.gameReadAt === oldSync,
+      '刚读取过的旧游戏快照可减少重复接口读取，同时始终保留原始同步时间');
+    await refresh('stock-sync-unknown');
+    assert([...results.querySelectorAll('.pt-cache')].every(node => node.dataset.stale === 'true' && node.textContent.includes('原站同步 时间未知')),
+      '原站缺少同步时间时明确显示未知，不使用缓存读取时间代替');
+    await refresh('limit-partial');
+    fixture.scenario = 'normal';
+    await refreshCached();
+    assert(fixture.calls.filter(c => c.path.includes('/listings?')).length === 1
+      && fixture.calls.some(c => c.path.includes('gardenId=account-a')) && dailyStatus.hidden && row('account-a', '1:5'),
+      '手动刷新独立重读当天停刷账号以核对额度恢复，其他账号仍复用缓存');
+    const accountB = fixture.meta.gardens.find(g => g.gardenId === 'account-b');
+    accountB.channel = 'wechat';
+    await refreshCached();
+    assert(fixture.calls.filter(c => c.path.includes('/listings?')).length === 1
+      && fixture.calls.some(c => c.path.includes('gardenId=account-b')) && inventory().get('account-b').stock.channel === 'wechat',
+      '账号渠道变化时只重读该账号，不混用旧渠道缓存');
+    accountB.channel = 'alipay';
+    await refresh('normal');
+    const previousGardens = fixture.meta.gardens;
+    fixture.meta.gardens = previousGardens.filter(g => g.gardenId !== 'account-c');
+    await refreshCached();
+    assert(!inventory().has('account-c') && !group('account-c') && inventory().size === 3, '重新核对绑定账号后移除解绑账号的仓库缓存');
+    fixture.meta.gardens = previousGardens;
+    await refresh('normal');
+    fixture.scenario = 'denied';
+    await refreshCached();
+    assert(inventory().size === 0 && !results.querySelector('li'), '登录或权限失效时清除本地仓库缓存，不靠缓存绕过权限检查');
+    await refresh('normal');
+    fixture.advance(29 * 60000);
+    fixture.scenario = 'limited';
+    await refreshCached();
+    assert(!fixture.calls.some(c => c.path.includes('/listings?')) && resumePoint(), '有效仓库缓存可以进入断点，但保留最初读取时间');
+    fixture.advance(121000);
+    fixture.scenario = 'normal';
+    await refreshCached();
+    assert(fixture.calls.filter(c => c.path.includes('/listings?')).length === 4
+      && document.querySelector('#ppg-trade-notice').textContent.includes('仓库缓存已过期'), '断点本身未过期但内部仓库缓存过期时，重新读取而不延长旧库存寿命');
+    const setItem = Storage.prototype.setItem;
+    try {
+      Storage.prototype.setItem = function(key, value) {
+        if (key === 'ppg-trade-stock-cache-v1') throw new DOMException('Storage full', 'QuotaExceededError');
+        return setItem.call(this, key, value);
+      };
+      await refresh('normal');
+      assert(document.querySelector('#ppg-trade-notice').textContent.includes('无法保存仓库缓存') && results.querySelector('li'),
+        '仓库持久化失败时给出div提示，仍能完成查询');
+      await refreshCached();
+      assert(!fixture.calls.some(c => c.path.includes('/listings?')), '存储失败后当前页面仍可复用内存库存');
+    } finally { Storage.prototype.setItem = setItem; }
+    assert(autoRefresh.getAttribute('aria-checked') === 'false', '更新仓库及复用缓存不改变自动刷新开关');
     output.textContent = `PASS ${passed.length}\n${passed.join('\n')}`;
   } catch (error) {
     output.textContent = `FAIL after ${passed.length}: ${error.message}`;
