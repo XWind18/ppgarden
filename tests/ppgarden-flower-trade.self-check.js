@@ -6,6 +6,24 @@
   const launcher = document.querySelector('#ppg-trade-open');
   const results = panel.querySelector('#ppg-trade-results');
   const status = panel.querySelector('#ppg-trade-status');
+  const autoRefresh = panel.querySelector('[data-trade="auto-refresh"]');
+  const nativeSetTimeout = window.setTimeout.bind(window);
+  const nativeClearTimeout = window.clearTimeout.bind(window);
+  const timers = new Map();
+  window.setTimeout = (callback, delay = 0, ...args) => {
+    const id = nativeSetTimeout(() => { timers.delete(id); callback(...args); }, delay);
+    timers.set(id, { at: Date.now() + Number(delay), run: () => callback(...args) });
+    return id;
+  };
+  window.clearTimeout = id => { timers.delete(id); nativeClearTimeout(id); };
+  const flushTimers = () => {
+    for (const [id, timer] of [...timers]) if (timer.at <= Date.now()) {
+      window.clearTimeout(id);
+      timer.run();
+    }
+  };
+  let pageHidden = false;
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => pageHidden });
   const passed = [];
   const assert = (condition, text) => {
     if (!condition) throw new Error(text);
@@ -32,6 +50,7 @@
   try {
     assert(fixture && panel.tagName === 'DIV' && panel.hidden, '使用独立 div 悬浮窗，初始关闭');
     assert(!launcher.hidden && fixture.calls.length === 0, '仅在交易页显示入口，未打开时不读取接口');
+    assert(autoRefresh.getAttribute('aria-checked') === 'true' && autoRefresh.textContent.includes('10分钟'), '默认开启每10分钟自动刷新，并明确显示开关状态');
     launcher.focus();
     launcher.click();
     assert(!panel.hidden && launcher.getAttribute('aria-expanded') === 'true', '点击入口打开悬浮窗');
@@ -80,12 +99,55 @@
     document.documentElement.dataset.theme = 'dark';
     assert(getComputedStyle(panel).backgroundColor !== lightBackground, '深色主题跟随页面切换');
     document.documentElement.removeAttribute('data-theme');
+    fixture.calls.length = 0;
+    panel.querySelector('[data-trade="close"]').click();
+    launcher.click();
+    await tick();
+    assert(fixture.calls.length === 0 && results.querySelectorAll('li').length === 7, '10分钟内重新打开窗口保留完整列表，不重新查询');
+    fixture.advance(9 * 60000);
+    flushTimers();
+    await tick();
+    assert(fixture.calls.length === 0, '未满10分钟不提前自动刷新');
+    fixture.advance(60000);
+    flushTimers();
+    document.dispatchEvent(new Event('visibilitychange'));
+    document.dispatchEvent(new Event('visibilitychange'));
+    await wait();
+    assert(fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1
+      && fixture.calls.some(c => c.path.includes('sell-quote')), '满10分钟自动读取新数据，重复唤醒不会并发查询');
     await refresh('normal', false);
-    assert(fixture.calls.length === 1 && fixture.calls[0].path === '/api/trade/meta'
-      && results.querySelectorAll('li').length === 7 && status.textContent.includes('缓存'), '30秒内复用求购库存及报价缓存，交易权限仍每次读取');
+    assert(fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1
+      && fixture.calls.some(c => c.path.includes('/listings?')) && fixture.calls.some(c => c.path.includes('sell-quote')), '手动刷新立即重新读取账号、库存及报价，不复用旧接口数据');
+    autoRefresh.click();
+    assert(autoRefresh.getAttribute('aria-checked') === 'false' && autoRefresh.textContent.includes('关闭')
+      && localStorage.getItem('ppg-trade-auto-refresh-v1') === 'false', '关闭自动刷新有清晰提示，且保存开关设置');
+    fixture.calls.length = 0;
+    fixture.advance(610000);
+    flushTimers();
+    await tick();
+    panel.querySelector('[data-trade="close"]').click();
+    launcher.click();
+    await tick();
+    assert(fixture.calls.length === 0, '关闭开关后，满10分钟及重新打开均不自动查询');
+    autoRefresh.click();
+    await wait();
+    assert(autoRefresh.getAttribute('aria-checked') === 'true'
+      && localStorage.getItem('ppg-trade-auto-refresh-v1') === 'true'
+      && fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1, '重新开启自动刷新会更新过期列表，并保存开启状态');
+    pageHidden = true;
+    document.dispatchEvent(new Event('visibilitychange'));
+    fixture.calls.length = 0;
+    fixture.advance(610000);
+    flushTimers();
+    await tick();
+    assert(fixture.calls.length === 0, '页面在后台时暂停自动查询');
+    pageHidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+    await wait();
+    assert(fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1, '回到前台时只补一次已到期刷新');
     await refresh('empty');
     assert(!results.querySelector('li') && status.textContent.includes('0 项可交易'), '无库存时显示空结果');
-    assert(fixture.calls.some(c => c.path.includes('/listings?')), '缓存过期后重新读取仓库，不继续使用旧数据');
+    assert(fixture.calls.some(c => c.path.includes('/listings?')), '手动刷新重新读取仓库，不继续使用旧数据');
     assert(!fixture.calls.some(c => c.path.includes('sell-quote')), '无可卖库存时不逐张请求核验');
     await refresh('paused');
     assert(results.querySelectorAll('li').length === 7, '全部账号自动出售暂停、库存未启用出售时，仍按手动报价显示可卖花朵');
@@ -121,16 +183,18 @@
     assert(status.textContent.includes('库存或求购数据格式已变化') && !results.querySelector('li'), '库存账号与请求不匹配时停止使用数据');
     await refresh('invalid-quote');
     assert(status.textContent.includes('核验数据格式已变化') && !results.querySelector('li'), '报价请求ID不匹配时停止使用数据');
-    fixture.scenario = 'normal';
+    await refresh('normal');
     fixture.delay = 200;
     panel.querySelector('[data-trade="refresh"]').click();
     panel.querySelector('[data-trade="close"]').click();
     await tick();
     assert(panel.hidden && fixture.aborted > 0 && document.activeElement === launcher, '关闭时取消请求并恢复入口焦点');
     fixture.delay = 0;
+    fixture.calls.length = 0;
     launcher.click();
     await wait();
-    assert(results.querySelector('li') && !panel.hidden, '重新打开会重新读取结果');
+    assert(results.querySelector('li') && !panel.hidden && fixture.calls.length === 0
+      && status.textContent.includes('查询已暂停'), '查询取消后重新打开保留已有列表，明确提示中断且不重复查询');
     panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     assert(panel.hidden && launcher.getAttribute('aria-expanded') === 'false', 'Esc收起悬浮窗并同步入口状态');
     const page = document.querySelector('.trd-page');
@@ -142,6 +206,10 @@
     page.lastChild.remove();
     await tick();
     assert(!launcher.hidden, '单页应用切回交易页恢复入口');
+    launcher.click();
+    await tick();
+    assert(fixture.calls.length === 0 && results.querySelector('li'), '切换页面再回来保留列表，不触发整轮重新加载');
+    panel.querySelector('[data-trade="close"]').click();
     const overlay = document.querySelector('.garden-account-overlay');
     overlay.dataset.open = 'true';
     await tick();
