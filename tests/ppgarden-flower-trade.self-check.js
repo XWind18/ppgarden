@@ -7,6 +7,9 @@
   const results = panel.querySelector('#ppg-trade-results');
   const status = panel.querySelector('#ppg-trade-status');
   const autoRefresh = panel.querySelector('[data-trade="auto-refresh"]');
+  const refreshMinutes = panel.querySelector('[data-trade="refresh-minutes"]');
+  const dailyStatus = panel.querySelector('#ppg-trade-daily-status');
+  const dailyPauses = () => JSON.parse(localStorage.getItem('ppg-trade-daily-pause-v1'))?.accounts || [];
   const nativeSetTimeout = window.setTimeout.bind(window);
   const nativeClearTimeout = window.clearTimeout.bind(window);
   const timers = new Map();
@@ -50,12 +53,12 @@
   try {
     assert(fixture && panel.tagName === 'DIV' && panel.hidden, '使用独立 div 悬浮窗，初始关闭');
     assert(!launcher.hidden && fixture.calls.length === 0, '仅在交易页显示入口，未打开时不读取接口');
-    assert(autoRefresh.getAttribute('aria-checked') === 'true' && autoRefresh.textContent.includes('10分钟'), '默认开启每10分钟自动刷新，并明确显示开关状态');
+    assert(autoRefresh.getAttribute('aria-checked') === 'false' && autoRefresh.textContent.includes('关闭'), '首次安装默认关闭自动刷新，并明确显示开关状态');
     launcher.focus();
     launcher.click();
     assert(!panel.hidden && launcher.getAttribute('aria-expanded') === 'true', '点击入口打开悬浮窗');
     assert(document.activeElement === panel.querySelector('[data-trade="close"]'), '打开时聚焦关闭按钮，不弹出手机键盘');
-    await tick();
+    await until(() => results.querySelector('li'));
     assert(results.getAttribute('aria-busy') === 'true' && results.querySelector('li'), '查询尚未完成时已显示首批可交易结果');
     group('account-a').open = false;
     const focusedRequest = row('account-b', '1:5').dataset.request;
@@ -68,12 +71,15 @@
     group('account-a').open = true;
     assert([...results.querySelectorAll('details')].map(d => d.dataset.account).join(',') === 'account-a,account-b,account-c,account-d', '按页面账号顺序分组，兼容多个渠道');
     assert(group('account-a').querySelectorAll('li').length === 4, '主号只列有库存且已通过核验的四种花');
-    assert([...group('account-a').querySelectorAll('.pt-price strong')].map(n => n.textContent).join(',') === '80,60,20,10', '每个账号按每组出价数值降序排列');
+    assert([...group('account-a').querySelectorAll('.pt-price small')].map(n => n.textContent.match(/^出价 (\d+)/)[1]).join(',') === '80,60,20,10', '每个账号按每组出价数值降序排列');
+    assert(row('account-a', '1:5').querySelector('.pt-price strong').textContent === '56'
+      && row('account-a', '1:5').querySelector('.pt-net-label').textContent === '实得'
+      && row('account-a', '1:5').querySelector('.pt-price small').textContent === '出价 80 分钟/组', '实得以主数值大字显示，原出价作为次要参考');
     assert(row('account-a', '1:5').dataset.request === '2', '最高报价被该账号阻止时，选择下一张能成交的报价');
     assert(row('account-b', '1:5').dataset.request === '1' && group('account-b').querySelectorAll('li').length === 1, '另一账号保留最高报价，相同花品质只列一次');
     assert(row('account-a', '1:5').textContent.includes('可卖 3 组'), '可卖组数受买家剩余需求限制');
     assert(row('account-a', '3:1').textContent.includes('可卖 2 组'), '可卖组数受服务器可售组数限制');
-    assert(row('account-b', '1:5').textContent.includes('实得 100 分钟/组'), '实得读取服务器金额，保留向下取整结果');
+    assert(row('account-b', '1:5').querySelector('.pt-price strong').textContent === '100', '实得读取服务器金额，保留向下取整结果');
     assert(!row('account-b', '2:4'), '仓库快照缺失的花不当作有货');
     assert(row('account-c', '1:5')?.dataset.request === '1', '出售模块暂停时，仍展示手动报价接口明确允许的有货花朵');
     assert(fixture.calls.filter(c => c.path.includes('/listings?')).length === 4
@@ -99,6 +105,8 @@
     document.documentElement.dataset.theme = 'dark';
     assert(getComputedStyle(panel).backgroundColor !== lightBackground, '深色主题跟随页面切换');
     document.documentElement.removeAttribute('data-theme');
+    autoRefresh.click();
+    assert(autoRefresh.getAttribute('aria-checked') === 'true' && autoRefresh.textContent.includes('10分钟'), '用户可手动开启每10分钟自动刷新');
     fixture.calls.length = 0;
     panel.querySelector('[data-trade="close"]').click();
     launcher.click();
@@ -259,6 +267,98 @@
     await until(() => document.querySelector('#ppg-trade-notice').textContent.includes('未找到对应求购编号'));
     assert(!document.querySelector('.trd-sheet__panel') && fixture.submitted === 0, '编号已经消失时不把相似求购当成目标，不触发成交');
     fixture.hideTarget = false;
+    launcher.click();
+    await refresh('limit-partial');
+    assert(!group('account-a').querySelector('li') && group('account-a').textContent.includes('今日交易次数已达上限')
+      && group('account-b').querySelector('li') && dailyStatus.textContent.includes('1/4'), '每账号独立计算20次上限，仅暂停达到上限的账号');
+    fixture.calls.length = 0;
+    fixture.advance(610000);
+    flushTimers();
+    await wait();
+    assert(!fixture.calls.some(c => c.path.includes('gardenId=account-a'))
+      && fixture.calls.some(c => c.path.includes('gardenId=account-b')) && !group('account-a').querySelector('li'), '后续自动刷新跳过已耗尽账号，其他账号继续读取库存和报价');
+    await refresh('normal', false);
+    assert(fixture.calls.some(c => c.path.includes('gardenId=account-a')) && row('account-a', '1:5')
+      && dailyStatus.hidden && dailyPauses().length === 0, '手动刷新可重新核验停刷账号，明确恢复额度后解除当天暂停');
+    await refresh('quota-partial');
+    assert(!group('account-a').querySelector('li') && group('account-a').textContent.includes('无剩余上架次数')
+      && group('account-b').querySelector('li') && dailyPauses().length === 1, '剩余上架次数为零时，只停止该账号当天自动刷新并保存');
+    await refresh('normal');
+    await refresh('quota-unknown');
+    assert(dailyStatus.hidden && dailyPauses().length === 0 && results.querySelector('li'), '未知上架次数及非数值交易次数不能当作耗尽');
+    await refresh('quota-committed');
+    assert(dailyStatus.hidden && results.querySelector('li'), '额度被在途订单占用、暂时没有空货架，不当作当天次数耗尽');
+    await refresh('quota-old');
+    assert(dailyStatus.hidden && results.querySelector('li'), '前一天的游戏上架次数不能暂停当天自动刷新');
+    await refresh('quota-not-confirmed');
+    assert(dailyStatus.hidden && dailyPauses().length === 0, '无上架次数数据和待刷新提示不能当作次数已用完');
+    await refresh('quota-short');
+    assert(dailyStatus.hidden && dailyPauses().length === 0, '不够本单组数不能当作当天剩余次数为零');
+    await refresh('empty');
+    assert(dailyStatus.hidden && dailyPauses().length === 0, '暂无可交易花朵不能当作账号额度耗尽');
+    await refresh('quota-text');
+    assert(dailyPauses().length === 4 && dailyStatus.textContent.includes('4/4') && !results.querySelector('li'), '报价明确提示无上架次数时，分别保存每个账号的当天停刷状态');
+    await refresh('normal');
+    await refresh('mixed-exhausted');
+    assert(dailyPauses().filter(([, reason]) => reason === 'limit').length === 2
+      && dailyPauses().filter(([, reason]) => reason === 'quota').length === 2
+      && !fixture.calls.some(c => c.path.includes('sell-quote')), '不同账号分别因20次上限或上架次数归零停刷，不再请求无效报价');
+    fixture.calls.length = 0;
+    fixture.advance(610000);
+    flushTimers();
+    await tick();
+    panel.querySelector('[data-trade="close"]').click();
+    launcher.click();
+    await tick();
+    assert(fixture.calls.length === 0 && dailyStatus.textContent.includes('4/4'), '全部账号都耗尽后，当天不再自动查询，重开窗口也不查询');
+    const savedDay = JSON.parse(localStorage.getItem('ppg-trade-daily-pause-v1'));
+    assert(savedDay.day === Math.floor((Date.now() + 8 * 3600000) / 86400000)
+      && new Map(savedDay.accounts).get('account-a') === 'limit'
+      && new Map(savedDay.accounts).get('account-b') === 'quota', '当天停刷状态按北京时间日期及账号分别持久保存');
+    await refresh('mixed-exhausted', false);
+    assert(fixture.calls.some(c => c.path.includes('/listings?')), '全部停刷时仍能手动重新核验各账号');
+    fixture.scenario = 'normal';
+    fixture.calls.length = 0;
+    const untilTomorrow = () => 86400000 - (Date.now() + 8 * 3600000) % 86400000 + 1000;
+    fixture.advance(untilTomorrow());
+    flushTimers();
+    await wait();
+    assert(fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1
+      && fixture.calls.filter(c => c.path.includes('/listings?')).length === 4
+      && dailyStatus.hidden && dailyPauses().length === 0, '北京时间次日零点解除各账号暂停，自动刷新开启时只恢复一轮核验');
+    await refresh('mixed-exhausted');
+    autoRefresh.click();
+    fixture.calls.length = 0;
+    fixture.advance(untilTomorrow());
+    flushTimers();
+    document.dispatchEvent(new Event('visibilitychange'));
+    await tick();
+    assert(fixture.calls.length === 0 && dailyPauses().length === 0
+      && autoRefresh.getAttribute('aria-checked') === 'false'
+      && localStorage.getItem('ppg-trade-auto-refresh-v1') === 'false', '次日清除当天停刷状态，但尊重用户手动关闭，不擅自开启自动刷新');
+    const setMinutes = minutes => {
+      refreshMinutes.value = String(minutes);
+      refreshMinutes.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    assert(refreshMinutes.value === '10' && refreshMinutes.min === '3', '默认刷新间隔10分钟，明确标记最小3分钟');
+    setMinutes(2);
+    assert(refreshMinutes.value === '10' && document.querySelector('#ppg-trade-notice').textContent.includes('不小于3'), '低于3分钟时拒绝并恢复上一个有效间隔');
+    setMinutes(3.5);
+    assert(refreshMinutes.value === '10', '拒绝小数和无效间隔');
+    setMinutes(3);
+    assert(localStorage.getItem('ppg-trade-refresh-minutes-v1') === '3' && autoRefresh.getAttribute('aria-checked') === 'false', '3分钟间隔保存生效，修改间隔不擅自开启自动刷新');
+    fixture.scenario = 'normal';
+    fixture.calls.length = 0;
+    autoRefresh.click();
+    assert(autoRefresh.textContent.includes('每3分钟'), '开关显示当前自定义刷新间隔');
+    fixture.advance(179000);
+    flushTimers();
+    await tick();
+    assert(fixture.calls.length === 0, '自定义3分钟间隔尚未到期时不自动读取');
+    fixture.advance(2000);
+    flushTimers();
+    await wait();
+    assert(fixture.calls.filter(c => c.path === '/api/trade/meta').length === 1, '达到自定义3分钟间隔时仅刷新一轮');
     output.textContent = `PASS ${passed.length}\n${passed.join('\n')}`;
   } catch (error) {
     output.textContent = `FAIL after ${passed.length}: ${error.message}`;
