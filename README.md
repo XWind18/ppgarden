@@ -1,12 +1,17 @@
 # PPGarden · 云上花匠油猴脚本
 
-正式脚本：[ppgarden-task-layout.user.js](ppgarden-task-layout.user.js)，当前版本 **1.8.11**。
+| 脚本 | 当前版本 | 安装 |
+| --- | --- | --- |
+| 任务／花圃显示设置 | **1.8.11** | [安装／更新](https://raw.githubusercontent.com/XWind18/ppgarden/main/ppgarden-task-layout.user.js) |
+| 花朵交易助手 | **1.0.0** | [安装／更新](https://raw.githubusercontent.com/XWind18/ppgarden/main/ppgarden-flower-trade.user.js) |
+
+两个脚本独立安装，可同时启用。花朵交易助手无需额外依赖，兼容桌面 Tampermonkey 与 iOS Safari 的 Userscripts。
 
 仓库：<https://github.com/XWind18/ppgarden>。公开读取，写入由 GitHub 仓库权限控制。
 
 ## 安装与更新
 
-**[安装／更新脚本](https://raw.githubusercontent.com/XWind18/ppgarden/main/ppgarden-task-layout.user.js)**
+按上表选择需要的脚本，打开对应的「安装／更新」链接。
 
 - 桌面：安装 Tampermonkey 等脚本管理器，再打开上面的链接安装，访问 <https://ppgarden.top/> 使用。
 - iPhone／iPad：在 Safari 打开安装链接，再打开 Userscripts 扩展，按安装提示安装或更新。也可将 `.user.js` 文件保存到 Userscripts 的脚本目录。
@@ -14,7 +19,27 @@
 - Tampermonkey 按管理器的更新设置检查新版本，也可在管理器中手动检查更新。
 - Userscripts 在扩展的「可用更新」中查看并应用新版本；未检测到时，可重新打开安装链接覆盖更新。安装及更新方式见 [Userscripts 官方说明](https://github.com/quoid/userscripts#usage)。
 
-脚本使用 `@version` 检测版本，`@updateURL` 指向轻量的 `.meta.js`，`@downloadURL` 指向完整的 `.user.js`。安装时只需 `.user.js`；截图组件由脚本管理器按脚本声明加载。后续安装链接保持固定，无需部署服务器。
+脚本使用 `@version` 检测版本，`@updateURL` 指向对应的 `.meta.js`，`@downloadURL` 指向完整的 `.user.js`。安装时只需 `.user.js`；任务脚本的截图组件由脚本管理器按脚本声明加载。后续安装链接保持固定，无需部署服务器。
+
+## 花朵交易助手
+
+- 在花朵交易页（`#trade`）右下角点击「可交易花朵」，打开独立的 div 悬浮窗。
+- 按网站账号顺序分组，每个账号内按 **每组出价数值从高到低** 排列；显示花名、品质、每组出价、每组实得时长、库存朵数和本次可卖组数。
+- 同花同品质在每个账号下只显示一条，选择该账号能成交的最高报价；最高价不能成交时继续检查较低报价。相同价格优先保留可卖组数更多的求购。
+- 读取网站的交易规则、各渠道求购、可卖库存与逐单 `sell-quote` 核验；可卖组数以服务器核验为准，受库存、额度、占用和买家剩余需求限制。不会仅凭页面存在「接单」按钮就判定能卖。
+- 排除自己的求购、过期或暂停的求购、正在游戏或队列已满的买家、已满足的需求、缺失库存快照及服务器阻止的账号。出售暂停、账号交易暂停、团单暂停等状态会单独显示。
+- 只在打开窗口或点击「刷新列表」时读取，关闭或离开交易页会取消未完成读取；结果只放在当前页面内存中。所有调用均为同站 GET，不保存凭据、不发送到其他网站、不自动下单或更改出售设置。
+- 悬浮窗跟随页面深浅色；手机按钮至少44px，并自动避开底部导航；原站账号菜单、功能菜单或求购详情打开时收起悬浮窗，避免遮挡菜单。
+- 无库存时显示空状态；登录失效、网络错误、请求频繁或接口格式变化时显示具体提示。接口只返回部分求购、求购在核验中发生变化时会提示覆盖范围；读取中断时把已核验结果标为部分结果。
+- 列表使用网站本次返回的求购和库存快照。每种花的可卖组数单独核算，共享库存及账号额度，不能把各行组数直接相加当成同时可成交总量。成交前应回到网站进行确认。
+
+本地自检（模拟接口，不发起真实交易）：
+
+```sh
+python3 -m http.server 18874 --bind 127.0.0.1
+```
+
+打开 <http://127.0.0.1:18874/tests/fixtures/flower-trade.html?test>，页面下方显示自检结果；去掉 `?test` 可预览窗口，使用 `?dark` 预览深色。
 
 ## 发布新版本
 
@@ -25,13 +50,15 @@
    node scripts/sync-metadata.mjs
    node --check ppgarden-task-layout.user.js
    node --check ppgarden-task-layout.meta.js
+   node --check ppgarden-flower-trade.user.js
+   node --check ppgarden-flower-trade.meta.js
    git diff --check
    ```
 
 3. 查看并提交改动，推送到 `main`；发布脚本和 `.meta.js` 时使用同一次提交，保证版本一致：
 
    ```sh
-   git add ppgarden-task-layout.user.js ppgarden-task-layout.meta.js README.md
+   git add ppgarden-task-layout.user.js ppgarden-task-layout.meta.js ppgarden-flower-trade.user.js ppgarden-flower-trade.meta.js README.md scripts tests
    git diff --cached
    git commit -m "Release v1.8.10"
    git push origin main
@@ -45,8 +72,10 @@
 ppgarden/
 ├── README.md                         # 使用说明和文件入口
 ├── .gitignore                        # 本地预览及导出文件不纳入版本控制
-├── ppgarden-task-layout.user.js       # 唯一正式安装脚本
-├── ppgarden-task-layout.meta.js       # 版本检测文件
+├── ppgarden-task-layout.user.js       # 任务／花圃设置安装脚本
+├── ppgarden-task-layout.meta.js       # 任务脚本版本检测
+├── ppgarden-flower-trade.user.js      # 花朵交易助手安装脚本
+├── ppgarden-flower-trade.meta.js      # 交易助手版本检测
 ├── scripts/                          # 元数据同步工具
 ├── tests/                            # 浏览器自检脚本
 ├── previews/                         # 本地界面与功能预览
@@ -107,6 +136,7 @@ ppgarden/
 | [设置历史](tests/ppgarden-history.self-check.js) | 自动与手动备份、任务与花圃恢复、截图设置、20条上限、无效条目、存储失败保护、模拟清空管理器后自动恢复 |
 | [待刷新快捷筛选](tests/ppgarden-pending-toggle.self-check.js) | 选中高亮与勾选标记、取消后样式恢复、原按钮右侧位置、双向同步、筛选互斥、动态任务与工具栏替换、历史与刷新恢复、手机宽度 |
 | [截图同步提醒](tests/ppgarden-sync-warning.self-check.js) | 5分钟边界、三个截图入口、弹窗时间卡片与焦点、关闭／取消／继续、跨天跨年、无效时间、确认后的截图时间与剪贴板调用时机 |
+| [花朵交易](tests/ppgarden-flower-trade.self-check.js) | 多账号多渠道、最高价匹配、数值排序、库存与需求限制、暂停及阻止状态、纯文本安全、空结果、接口异常、取消、导航避让及手机深浅色；使用独立模拟夹具 |
 
 这些自检脚本需要在对应的本地浏览器测试页中执行，测试页须包含页面快照、原站样式、所需测试夹具和脚本管理器接口替身。截图检查还需要加载脚本声明的 html2canvas-pro。`tests/` 中的文件不能直接作为 Node.js 测试运行，也不应注入正在使用的真实业务页面。
 
