@@ -48,6 +48,7 @@
 <div class="garden-account-overlay" data-open="false"><button id="fixture-menu-close">关闭账号菜单</button></div>
 <script>
   const options = new URLSearchParams(location.search);
+  if (options.has('test')) localStorage.removeItem('ppg-trade-auto-refresh-v1');
   if (options.has('dark')) document.documentElement.dataset.theme = 'dark';
   const realNow = Date.now;
   let clockOffset = 0;
@@ -195,11 +196,11 @@
   }
   renderSite();
 </script>
-<script src="../../ppgarden-flower-trade.user.js?v=1.1.0"></script>
+<script src="../../ppgarden-flower-trade.user.js?v=1.1.1"></script>
 <script>
   if (options.has('test')) {
     const check = document.createElement('script');
-    check.src = '../ppgarden-flower-trade.self-check.js?v=1.1.0';
+    check.src = '../ppgarden-flower-trade.self-check.js?v=1.1.1';
     document.body.append(check);
   }
 </script>
