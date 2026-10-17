@@ -57,7 +57,7 @@
   const fixture = window.tradeFixture = {
     calls: [], scenario: 'normal', delay: 0, aborted: 0,
     meta: { allowed: true, enabled: true, channels: ['alipay', 'wechat'], userControl: { paused: false }, limits: { groupSize: 25 },
-      gardens: [garden('account-b', '测试小号'), garden('account-c', '已暂停账号', 'alipay', true), garden('account-a', '测试主号'), garden('account-d', '微信账号', 'wechat')],
+      gardens: [garden('account-b', '测试小号'), garden('account-c', '自动出售暂停账号', 'alipay', true), garden('account-a', '测试主号'), garden('account-d', '微信账号', 'wechat')],
       flowers: [{ flowerId: 1, quality: 5, name: '碧羽青鸾' }, { flowerId: 2, quality: 4, name: '灵松照夜' },
         { flowerId: 3, quality: 1, name: '蓝绣球' }, { flowerId: 4, quality: 2, name: options.has('test') ? '<img src=x onerror=alert(1)>超长花名测试' : '花笼琼光' }, { flowerId: 5, quality: 3, name: '没有库存的花' }] },
     board: { items: [request(1, 1, 5, 144), request(2, 1, 5, 80), request(3, 2, 4, 60), request(4, 3, 1, 20), request(5, 4, 2, 10),
@@ -67,7 +67,8 @@
       request(13, 1, 5, 194, { buyerGardenId: 'account-b' }), request(14, 1, 4, 193), request(1, 1, 5, 144),
       request(15, 1, 5, 192, { pausedReason: 'buyer_paused' }), request(16, 1, 5, 191, { status: 'filled' }),
       request(17, 1, 5, 190, { progress: { reached: true } })], openTruncated: false },
-    stock: { items: [1, 2, 3, 4].map((flowerId, index) => ({ flowerId, quality: [5, 4, 1, 2][index], sellableGroups: 9 })) },
+    stock: { items: [...[1, 2, 3, 4].map((flowerId, index) => ({ flowerId, quality: [5, 4, 1, 2][index],
+      count: 230, enabled: false, sellableGroups: 0 })), { flowerId: 5, quality: 3, count: 24 }] },
     quotes: {
       1: quote(1, 144, [seller('account-a', 0, { haveCount: 200, blockCode: 'quota_exhausted', blockText: '今日额度已用完' }), seller('account-b', 4), seller('account-c', 9)]),
       2: quote(2, 80, [seller('account-a', 9), seller('account-b', 8)], { remainingGroups: 3 }),
@@ -90,14 +91,21 @@
     if (url.pathname === '/api/trade/meta') {
       data = structuredClone(fixture.meta);
       if (fixture.scenario === 'paused') data.gardens.forEach(g => { g.pause.sell.paused = g.pause.sell.effectivePaused = true; });
+      if (fixture.scenario === 'user-paused') data.userControl.paused = true;
+      if (fixture.scenario === 'garden-paused') data.gardens.find(g => g.gardenId === 'account-b').pause.gardenControl = { paused: true };
       if (fixture.scenario === 'team') data.teamWindow = { active: true };
       if (fixture.scenario === 'denied') return Response.json({ error: 'unauthorized' }, { status: 401 });
       if (fixture.scenario === 'malformed') data.gardens = null;
     } else if (url.pathname === '/api/trade/requests') {
       data = url.searchParams.get('channel') === 'wechat' ? { items: [request(21, 3, 1, 25, { channel: 'wechat' })] } : structuredClone(fixture.board);
       if (fixture.scenario === 'truncated') data.openTruncated = true;
+    } else if (url.pathname === '/api/trade/listings') {
+      const id = url.searchParams.get('gardenId');
+      data = { gardenId: id, channel: fixture.meta.gardens.find(g => g.gardenId === id)?.channel,
+        items: fixture.scenario === 'empty' ? [] : structuredClone(fixture.stock.items) };
+      if (fixture.scenario === 'invalid-stock') data.gardenId = 'wrong-account';
     } else if (url.pathname === '/api/trade/sellable-stock') {
-      data = fixture.scenario === 'empty' ? { items: [] } : fixture.stock;
+      data = { items: [] };
     } else {
       const id = Number(url.pathname.match(/^\/api\/trade\/requests\/(\d+)\/sell-quote$/)?.[1]);
       if (!id) throw new Error(`Unexpected endpoint: ${path}`);
@@ -105,6 +113,7 @@
       if (fixture.scenario === 'gone' && id === 3) return Response.json({ error: 'request_changed' }, { status: 409 });
       data = id === 21 ? quote(21, 25, [seller('account-d', 2), seller('account-a', 9)]) : structuredClone(fixture.quotes[id]);
       if (fixture.scenario === 'quote-paused' && id === 1) data.paused = true;
+      if (fixture.scenario === 'seller-blocked' && id === 1) data.sellers.find(s => s.gardenId === 'account-c').blockCode = 'seller_paused';
       if (fixture.scenario === 'quote-empty' && id === 2) data.remainingGroups = 0;
       if (fixture.scenario === 'invalid-quote' && id === 1) data.requestId = 900;
     }
@@ -112,11 +121,11 @@
   };
   document.querySelector('#fixture-menu-close').onclick = () => { document.querySelector('.garden-account-overlay').dataset.open = 'false'; };
 </script>
-<script src="../../ppgarden-flower-trade.user.js?v=1.0.0"></script>
+<script src="../../ppgarden-flower-trade.user.js?v=1.0.1"></script>
 <script>
   if (options.has('test')) {
     const check = document.createElement('script');
-    check.src = '../ppgarden-flower-trade.self-check.js?v=1.0.0';
+    check.src = '../ppgarden-flower-trade.self-check.js?v=1.0.1';
     document.body.append(check);
   }
 </script>
