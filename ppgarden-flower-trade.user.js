@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         云上花匠 · 花朵交易助手
 // @namespace    https://ppgarden.top/
-// @version      1.1.0
+// @version      1.1.1
 // @description  在花朵交易页用独立悬浮窗，按账号、每组出价从高到低列出可交易花朵、实得时长、库存和可卖组数。
 // @homepageURL  https://github.com/XWind18/ppgarden
 // @supportURL   https://github.com/XWind18/ppgarden/issues
@@ -57,6 +57,8 @@
       border-radius: 10px; background: var(--pt-bg); color: inherit; font: 600 13px/1.4 system-ui, sans-serif; cursor: pointer;
     }
     #ppg-trade-panel [data-trade="close"] { width: 44px; padding: 0; border: 0; font-size: 24px; color: var(--pt-muted); }
+    #ppg-trade-panel [data-trade="auto-refresh"] { align-self: flex-start; margin: 0 16px 8px; color: var(--pt-muted); }
+    #ppg-trade-panel [data-trade="auto-refresh"][aria-checked="true"] { color: var(--pt-green); border-color: var(--pt-green); background: var(--pt-inner); }
     #ppg-trade-panel button:disabled { opacity: .55; cursor: wait; }
     :is(#ppg-trade-open, #ppg-trade-panel button, #ppg-trade-panel summary):focus-visible {
       outline: 2px solid var(--pt-green); outline-offset: 2px;
@@ -111,9 +113,10 @@
   panel.setAttribute('aria-labelledby', 'ppg-trade-title');
   panel.innerHTML = `
     <header><h2 id="ppg-trade-title">可交易花朵</h2><button type="button" data-trade="refresh">刷新列表</button><button type="button" data-trade="close" aria-label="关闭交易悬浮窗">×</button></header>
+    <button type="button" data-trade="auto-refresh" role="switch" aria-label="每10分钟自动刷新" aria-checked="true">自动刷新：开启 · 每10分钟</button>
     <p id="ppg-trade-status" role="status" aria-live="polite">按账号分组 · 每组出价从高到低</p>
     <div id="ppg-trade-results" aria-busy="false"></div>
-    <footer>点花名定位求购；点「卖给他／接单」打开原站确认并预选账号。缓存最多 30 秒，各花组数单独核算，成交前由网站重新核验。</footer>
+    <footer>点花名定位求购；点「卖给他／接单」打开原站确认并预选账号。切换页面保留列表，可手动刷新；成交前由网站重新核验。</footer>
   `;
   const notice = textElement('div', '');
   notice.id = 'ppg-trade-notice';
@@ -125,15 +128,34 @@
   const status = panel.querySelector('#ppg-trade-status');
   const results = panel.querySelector('#ppg-trade-results');
   const refreshButton = panel.querySelector('[data-trade="refresh"]');
+  const autoRefreshButton = panel.querySelector('[data-trade="auto-refresh"]');
+  const refreshInterval = 10 * 60 * 1000;
+  const autoRefreshKey = 'ppg-trade-auto-refresh-v1';
+  let autoRefresh = true;
+  try { autoRefresh = localStorage.getItem(autoRefreshKey) !== 'false'; } catch {}
+  let refreshTimer;
+  let nextRefreshAt = 0;
   let controller;
   let previousFocus;
   let actionRun;
   let noticeTimer;
   let nextQuoteAt = 0;
   let retryAt = 0;
-  let cacheHits = 0;
-  let cacheScope = '';
-  const cache = new Map();
+
+  function syncAutoRefreshButton() {
+    autoRefreshButton.setAttribute('aria-checked', String(autoRefresh));
+    autoRefreshButton.textContent = autoRefresh ? '自动刷新：开启 · 每10分钟' : '自动刷新：关闭';
+  }
+
+  function scheduleRefresh() {
+    clearTimeout(refreshTimer);
+    if (panel.hidden || openButton.hidden || document.hidden || controller) return;
+    if (!nextRefreshAt || autoRefresh && nextRefreshAt <= Date.now() && retryAt <= Date.now()) {
+      refresh();
+    } else if (autoRefresh) {
+      refreshTimer = setTimeout(scheduleRefresh, Math.max(0, nextRefreshAt - Date.now(), retryAt - Date.now()));
+    }
+  }
 
   function notify(message) {
     clearTimeout(noticeTimer);
@@ -174,8 +196,6 @@
   }
 
   async function readJSON(path, signal) {
-    const saved = cache.get(path);
-    if (saved?.until > Date.now()) { cacheHits++; return saved.value; }
     if (path.endsWith('/sell-quote')) {
       await pause(Math.max(0, nextQuoteAt - Date.now()), signal);
       nextQuoteAt = Date.now() + 800;
@@ -202,7 +222,6 @@
       if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('未读到交易数据，请检查登录状态。');
       const value = await response.json();
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-      if (path !== '/api/trade/meta') cache.set(path, { value, until: Date.now() + 30000 });
       return value;
     } catch (error) {
       if (signal.aborted) throw error;
@@ -225,7 +244,6 @@
     close();
     const run = new AbortController();
     actionRun = run;
-    cache.clear();
     notify(`正在定位求购 #${row.requestId}…`);
     try {
       const page = document.querySelector('.trd-page');
@@ -366,11 +384,12 @@
   }
 
   async function refresh() {
+    if (controller) return;
     if (retryAt > Date.now()) {
       notify(`查询过于频繁，请等待 ${Math.ceil((retryAt - Date.now()) / 1000)} 秒再刷新；当前结果已保留。`);
       return;
     }
-    controller?.abort();
+    clearTimeout(refreshTimer);
     const run = new AbortController();
     controller = run;
     const groups = [];
@@ -378,10 +397,8 @@
     let skipped = 0;
     let truncated = false;
     let lowerSkipped = 0;
-    cacheHits = 0;
     refreshButton.disabled = true;
     results.setAttribute('aria-busy', 'true');
-    results.replaceChildren();
     status.dataset.error = 'false';
     status.textContent = '正在读取账号与交易状态…';
     try {
@@ -390,9 +407,6 @@
       if (meta.allowed !== true || meta.enabled !== true) throw new Error('当前账号暂时不能使用花朵交易。');
       if (!Array.isArray(meta.gardens) || !Array.isArray(meta.flowers) || !Array.isArray(meta.channels)
         || !positiveInt(meta.limits?.groupSize)) throw new Error('交易数据格式已变化，请更新脚本。');
-      const scope = JSON.stringify([meta.gardens.map(g => [g.gardenId, g.channel, g.pause]), meta.userControl, meta.teamWindow?.active]);
-      if (scope !== cacheScope) { cache.clear(); cacheScope = scope; }
-      for (const [path, saved] of cache) if (saved.until <= Date.now()) cache.delete(path);
       const accountOrder = [...document.querySelectorAll('[data-account-row]')].map(node => node.getAttribute('data-account-row'));
       const flowers = new Map(meta.flowers.filter(item => positiveInt(item.flowerId) && qualityNames[item.quality]
         && typeof item.name === 'string').map(item => [flowerKey(item), item]));
@@ -479,7 +493,6 @@
       const at = new Date().toLocaleTimeString('zh-CN', { hour12: false });
       status.textContent = `${groups.length} 个账号 · ${count} 项可交易 · 按出价降序 · ${at} 更新`
         + (checked ? ` · 已核验 ${checked} 张求购` : '')
-        + (cacheHits ? ` · 复用 ${cacheHits} 次缓存（30 秒内）` : '')
         + (lowerSkipped ? ` · 跳过 ${lowerSkipped} 张较低报价` : '')
         + (skipped ? ` · ${skipped} 张求购已变动，未列入` : '')
         + (truncated ? ' · 网站返回的求购不完整，结果仅覆盖已返回部分' : '');
@@ -487,21 +500,27 @@
       if (truncated || skipped) status.dataset.error = 'true';
     } catch (error) {
       if (run.signal.aborted) return;
-      if (error.status !== 429) cache.clear();
       render(groups);
       status.dataset.error = 'true';
       status.textContent = `读取未完成：${error.message || '请稍后重试。'}`
         + (results.querySelector('li') ? ' 下方是部分核验结果，请刷新后查看完整列表。' : '');
     } finally {
       if (controller === run) {
+        if (run.signal.aborted) {
+          status.dataset.error = 'true';
+          status.textContent = '查询已暂停，已保留现有列表；可点「刷新列表」重新读取。';
+        }
+        nextRefreshAt = Date.now() + refreshInterval;
         controller = null;
         refreshButton.disabled = false;
         results.setAttribute('aria-busy', 'false');
+        scheduleRefresh();
       }
     }
   }
 
   function close() {
+    clearTimeout(refreshTimer);
     controller?.abort();
     panel.hidden = true;
     openButton.setAttribute('aria-expanded', 'false');
@@ -514,10 +533,22 @@
     panel.hidden = false;
     openButton.setAttribute('aria-expanded', 'true');
     panel.querySelector('[data-trade="close"]').focus({ preventScroll: true });
-    refresh();
+    scheduleRefresh();
   });
   panel.querySelector('[data-trade="close"]').addEventListener('click', close);
   refreshButton.addEventListener('click', refresh);
+  autoRefreshButton.addEventListener('click', () => {
+    autoRefresh = !autoRefresh;
+    try { localStorage.setItem(autoRefreshKey, String(autoRefresh)); }
+    catch { notify('开关已生效，但当前浏览器无法保存，下次打开可能需要重新设置。'); }
+    syncAutoRefreshButton();
+    scheduleRefresh();
+  });
+  syncAutoRefreshButton();
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) controller?.abort();
+    scheduleRefresh();
+  });
   panel.addEventListener('keydown', event => {
     if (event.key === 'Escape') { event.preventDefault(); close(); }
   });
@@ -540,6 +571,7 @@
     const height = rect && rect.height > 0 && rect.top < innerHeight && rect.bottom > 0
       && getComputedStyle(nav).visibility !== 'hidden' ? Math.ceil(innerHeight - Math.max(0, rect.top)) : 0;
     document.documentElement.style.setProperty('--ppg-trade-nav-bottom', `${height}px`);
+    scheduleRefresh();
   }
   let syncFrame = 0;
   function scheduleSync() {
