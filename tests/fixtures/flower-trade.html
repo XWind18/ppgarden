@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>花朵交易助手 · 本地测试</title>
+  <style>
+    :root { color-scheme: light; --paper-card: #fff; --paper-inner: #f3f6f2; --paper-line: #dce4da; --ink: #283b31; --ink-muted: #66756b; }
+    :root[data-theme="dark"] { color-scheme: dark; --paper-card: #202a25; --paper-inner: #28342d; --paper-line: #3c4b41; --ink: #edf3ee; --ink-muted: #a9b9ad; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px; min-height: 100vh; background: var(--paper-inner); color: var(--ink); font: 14px/1.6 system-ui, sans-serif; }
+    main { max-width: 1100px; margin: auto; }
+    h1 { margin: 0 0 6px; font-size: 26px; }
+    p { color: var(--ink-muted); }
+    button { min-height: 44px; padding: 8px 12px; background: var(--paper-card); border: 1px solid var(--paper-line); border-radius: 8px; color: inherit; }
+    .fixture-tabs { display: flex; gap: 8px; margin: 20px 0; }
+    .fixture-card { padding: 20px; border: 1px solid var(--paper-line); border-radius: 16px; background: var(--paper-card); margin: 16px 0; }
+    .fixture-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .bottom-tabs { position: fixed; bottom: 0; left: 0; right: 0; height: 62px; display: flex; justify-content: space-around; background: var(--paper-card); border-top: 1px solid var(--paper-line); z-index: 10; }
+    .bottom-tabs button { border: 0; background: transparent; }
+    .garden-account-overlay[data-open="false"] { display: none; }
+    .garden-account-overlay[data-open="true"] { position: fixed; inset: 0; background: #111a; z-index: 200; padding: 40px; }
+    #trade-check-result { white-space: pre-wrap; margin-top: 20px; font-size: 12px; }
+    @media (max-width: 600px) { body { padding: 20px 16px 90px; } .fixture-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <section class="trd-page">
+    <h1>花朵交易</h1>
+    <p>本地模拟数据，用于验证悬浮窗；不连接真实交易。</p>
+    <div class="fixture-tabs"><button>买花</button><button>卖花</button><button>求购</button><button>拍卖</button></div>
+    <div class="fixture-card">当前账号　<strong>测试主号</strong>　·　求购大厅</div>
+    <div class="fixture-grid">
+      <div class="fixture-card">碧羽青鸾 · 仙品<br>上限 144 分钟/组</div>
+      <div class="fixture-card">灵松照夜 · 华品<br>80 分钟/组</div>
+      <div class="fixture-card">蓝绣球 · 凡品<br>20 分钟/组</div>
+    </div>
+  </section>
+  <pre id="trade-check-result" role="status"></pre>
+</main>
+<div hidden><span data-account-row="account-a"></span><span data-account-row="account-b"></span><span data-account-row="account-c"></span></div>
+<nav class="bottom-tabs" aria-label="手机主导航"><button>花园</button><button>公会</button><button>配置</button><button>动态</button><button>我的</button></nav>
+<div class="garden-account-overlay" data-open="false"><button id="fixture-menu-close">关闭账号菜单</button></div>
+<script>
+  const options = new URLSearchParams(location.search);
+  if (options.has('dark')) document.documentElement.dataset.theme = 'dark';
+  const future = Date.now() + 86400000;
+  const garden = (gardenId, nickname, channel = 'alipay', paused = false) => ({ gardenId, nickname, channel,
+    pause: { sell: { paused, effectivePaused: paused, by: paused ? 'user' : null } } });
+  const request = (id, flowerId, quality, pricePerGroup, extra = {}) => ({ id, flowerId, quality, pricePerGroup,
+    channel: 'alipay', mine: false, buyerGardenId: null, groups: 9, expiresAt: future, status: 'open', ...extra });
+  const seller = (gardenId, groups, extra = {}) => ({ gardenId, groups, sellableGroups: groups, haveCount: groups * 25 + 5,
+    snapshotMissing: false, blockCode: null, blockText: null, ...extra });
+  const quote = (requestId, pricePerGroup, sellers, extra = {}) => ({ requestId, pricePerGroup,
+    sellerGetsPerGroup: Math.floor(pricePerGroup * .7), remainingGroups: 9, paused: false, sellers, ...extra });
+  const fixture = window.tradeFixture = {
+    calls: [], scenario: 'normal', delay: 0, aborted: 0,
+    meta: { allowed: true, enabled: true, channels: ['alipay', 'wechat'], userControl: { paused: false }, limits: { groupSize: 25 },
+      gardens: [garden('account-b', '测试小号'), garden('account-c', '已暂停账号', 'alipay', true), garden('account-a', '测试主号'), garden('account-d', '微信账号', 'wechat')],
+      flowers: [{ flowerId: 1, quality: 5, name: '碧羽青鸾' }, { flowerId: 2, quality: 4, name: '灵松照夜' },
+        { flowerId: 3, quality: 1, name: '蓝绣球' }, { flowerId: 4, quality: 2, name: options.has('test') ? '<img src=x onerror=alert(1)>超长花名测试' : '花笼琼光' }, { flowerId: 5, quality: 3, name: '没有库存的花' }] },
+    board: { items: [request(1, 1, 5, 144), request(2, 1, 5, 80), request(3, 2, 4, 60), request(4, 3, 1, 20), request(5, 4, 2, 10),
+      request(6, 5, 3, 90), request(7, 1, 5, 200, { mine: true }), request(8, 1, 5, 199, { expiresAt: Date.now() - 1000 }),
+      request(9, 1, 5, 198, { buyerPlaying: true }), request(10, 1, 5, 197, { buyerQueueFull: true }),
+      request(11, 1, 5, 196, { progress: { satisfied: true } }), request(12, 1, 5, 195, { groups: 0 }),
+      request(13, 1, 5, 194, { buyerGardenId: 'account-b' }), request(14, 1, 4, 193), request(1, 1, 5, 144),
+      request(15, 1, 5, 192, { pausedReason: 'buyer_paused' }), request(16, 1, 5, 191, { status: 'filled' }),
+      request(17, 1, 5, 190, { progress: { reached: true } })], openTruncated: false },
+    stock: { items: [1, 2, 3, 4].map((flowerId, index) => ({ flowerId, quality: [5, 4, 1, 2][index], sellableGroups: 9 })) },
+    quotes: {
+      1: quote(1, 144, [seller('account-a', 0, { haveCount: 200, blockCode: 'quota_exhausted', blockText: '今日额度已用完' }), seller('account-b', 4), seller('account-c', 9)]),
+      2: quote(2, 80, [seller('account-a', 9), seller('account-b', 8)], { remainingGroups: 3 }),
+      3: quote(3, 60, [seller('account-a', 2), seller('account-b', 4, { snapshotMissing: true })]),
+      4: quote(4, 20, [seller('account-a', 8, { sellableGroups: 2 }), seller('account-b', 0)]),
+      5: quote(5, 10, [seller('account-a', 1)])
+    }
+  };
+  window.fetch = async (path, init) => {
+    fixture.calls.push({ path: String(path), method: init?.method });
+    if (fixture.delay) await new Promise((resolve, reject) => {
+      const done = () => { init.signal.removeEventListener('abort', abort); resolve(); };
+      const timer = setTimeout(done, fixture.delay);
+      const abort = () => { clearTimeout(timer); fixture.aborted++; reject(new DOMException('Aborted', 'AbortError')); };
+      if (init.signal.aborted) abort();
+      else init.signal.addEventListener('abort', abort, { once: true });
+    });
+    const url = new URL(path, location.origin);
+    let data;
+    if (url.pathname === '/api/trade/meta') {
+      data = structuredClone(fixture.meta);
+      if (fixture.scenario === 'paused') data.gardens.forEach(g => { g.pause.sell.paused = g.pause.sell.effectivePaused = true; });
+      if (fixture.scenario === 'team') data.teamWindow = { active: true };
+      if (fixture.scenario === 'denied') return Response.json({ error: 'unauthorized' }, { status: 401 });
+      if (fixture.scenario === 'malformed') data.gardens = null;
+    } else if (url.pathname === '/api/trade/requests') {
+      data = url.searchParams.get('channel') === 'wechat' ? { items: [request(21, 3, 1, 25, { channel: 'wechat' })] } : structuredClone(fixture.board);
+      if (fixture.scenario === 'truncated') data.openTruncated = true;
+    } else if (url.pathname === '/api/trade/sellable-stock') {
+      data = fixture.scenario === 'empty' ? { items: [] } : fixture.stock;
+    } else {
+      const id = Number(url.pathname.match(/^\/api\/trade\/requests\/(\d+)\/sell-quote$/)?.[1]);
+      if (!id) throw new Error(`Unexpected endpoint: ${path}`);
+      if (fixture.scenario === 'limited' && id === 3) return Response.json({ error: 'rate_limited' }, { status: 429 });
+      if (fixture.scenario === 'gone' && id === 3) return Response.json({ error: 'request_changed' }, { status: 409 });
+      data = id === 21 ? quote(21, 25, [seller('account-d', 2), seller('account-a', 9)]) : structuredClone(fixture.quotes[id]);
+      if (fixture.scenario === 'quote-paused' && id === 1) data.paused = true;
+      if (fixture.scenario === 'quote-empty' && id === 2) data.remainingGroups = 0;
+      if (fixture.scenario === 'invalid-quote' && id === 1) data.requestId = 900;
+    }
+    return Response.json(data);
+  };
+  document.querySelector('#fixture-menu-close').onclick = () => { document.querySelector('.garden-account-overlay').dataset.open = 'false'; };
+</script>
+<script src="../../ppgarden-flower-trade.user.js?v=1.0.0"></script>
+<script>
+  if (options.has('test')) {
+    const check = document.createElement('script');
+    check.src = '../ppgarden-flower-trade.self-check.js?v=1.0.0';
+    document.body.append(check);
+  }
+</script>
+</body>
+</html>
