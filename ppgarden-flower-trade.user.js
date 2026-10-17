@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         云上花匠 · 花朵交易助手
 // @namespace    https://ppgarden.top/
-// @version      1.1.2
+// @version      1.1.3
 // @description  在花朵交易页用独立悬浮窗，按账号、每组出价从高到低列出可交易花朵、实得时长、库存和可卖组数。
 // @homepageURL  https://github.com/XWind18/ppgarden
 // @supportURL   https://github.com/XWind18/ppgarden/issues
@@ -63,6 +63,7 @@
     #ppg-trade-panel .pt-refresh-settings label { display: flex; align-items: center; gap: 6px; color: var(--pt-muted); font-size: 12px; }
     #ppg-trade-panel .pt-refresh-settings input { width: 64px; min-height: 44px; border: 1px solid var(--pt-line); border-radius: 8px; padding: 6px;
       background: var(--pt-inner); color: var(--pt-ink); font: inherit; text-align: center; }
+    #ppg-trade-panel .pt-pacing { color: var(--pt-muted); font-size: 11px; }
     #ppg-trade-panel button:disabled { opacity: .55; cursor: wait; }
     :is(#ppg-trade-open, #ppg-trade-panel button, #ppg-trade-panel summary):focus-visible {
       outline: 2px solid var(--pt-green); outline-offset: 2px;
@@ -120,7 +121,8 @@
   panel.innerHTML = `
     <header><h2 id="ppg-trade-title">可交易花朵</h2><button type="button" data-trade="refresh">刷新列表</button><button type="button" data-trade="close" aria-label="关闭交易悬浮窗">×</button></header>
     <div class="pt-refresh-settings"><button type="button" data-trade="auto-refresh" role="switch" aria-label="每10分钟自动刷新" aria-checked="false">自动刷新：关闭</button>
-      <label>间隔 <input type="number" data-trade="refresh-minutes" aria-label="自动刷新间隔（分钟，最小3分钟）" min="3" step="1" value="10" inputmode="numeric"> 分钟</label></div>
+      <label>间隔 <input type="number" data-trade="refresh-minutes" aria-label="自动刷新间隔（分钟，最小3分钟）" min="3" step="1" value="10" inputmode="numeric"> 分钟</label>
+      <span class="pt-pacing">请求依次读取 · 每次间隔 2～3 秒（含随机延迟）</span></div>
     <p id="ppg-trade-daily-status" role="status" aria-live="polite" hidden></p>
     <p id="ppg-trade-status" role="status" aria-live="polite">按账号分组 · 每组出价从高到低</p>
     <div id="ppg-trade-results" aria-busy="false"></div>
@@ -170,7 +172,7 @@
   let previousFocus;
   let actionRun;
   let noticeTimer;
-  let nextQuoteAt = 0;
+  let nextRequestAt = 0;
   let retryAt = 0;
 
   function syncAutoRefreshButton() {
@@ -256,10 +258,8 @@
   }
 
   async function readJSON(path, signal) {
-    if (path.endsWith('/sell-quote')) {
-      await pause(Math.max(0, nextQuoteAt - Date.now()), signal);
-      nextQuoteAt = Date.now() + 800;
-    }
+    await pause(Math.max(0, nextRequestAt - Date.now()), signal);
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
     const request = new AbortController();
     const abort = () => request.abort();
     signal.addEventListener('abort', abort, { once: true });
@@ -289,6 +289,7 @@
       if (error instanceof TypeError) throw new Error('网络读取失败，请检查网络后重试。');
       throw error;
     } finally {
+      nextRequestAt = Date.now() + 2000 + Math.floor(Math.random() * 1001);
       clearTimeout(timeout);
       signal.removeEventListener('abort', abort);
     }
@@ -519,10 +520,11 @@
       for (const channel of new Set(groups.filter(group => !group.reason).map(group => group.channel))) {
         const channelGroups = groups.filter(group => group.channel === channel && !group.reason);
         const query = new URLSearchParams({ channel });
-        const [board, ...stocks] = await Promise.all([
-          readJSON(`/api/trade/requests?${query}`, run.signal),
-          ...channelGroups.map(group => readJSON(`/api/trade/listings?${new URLSearchParams({ gardenId: group.id })}`, run.signal)),
-        ]);
+        const board = await readJSON(`/api/trade/requests?${query}`, run.signal);
+        const stocks = [];
+        for (const group of channelGroups) {
+          stocks.push(await readJSON(`/api/trade/listings?${new URLSearchParams({ gardenId: group.id })}`, run.signal));
+        }
         if (run.signal.aborted) return;
         if (!Array.isArray(board.items) || stocks.some((stock, index) => !Array.isArray(stock.items)
           || stock.gardenId !== channelGroups[index].id || stock.channel !== channel)) {
